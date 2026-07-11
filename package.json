@@ -4,6 +4,14 @@
 	"author": "Scott Jackson",
 	"version": "0.0.1",
 	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/daneren2005/shared-memory-ecs.git"
+	},
+	"homepage": "https://github.com/daneren2005/shared-memory-ecs#readme",
+	"bugs": {
+		"url": "https://github.com/daneren2005/shared-memory-ecs/issues"
+	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"exports": {
