@@ -1,8 +1,12 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Tests"]
     branches: [production]
+    types: 
+      - completed
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -33,15 +37,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Type check
-        run: npm run type-check
-
-      - name: Test
-        run: npm test
 
       - name: Build
         run: npm run build

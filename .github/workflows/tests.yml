@@ -1,13 +1,14 @@
-name: CI
+name: Tests
 
 on:
   push:
-    branches: [ '*' ]
+    branches-ignore: [production]
   pull_request:
     branches: [dev]
+  workflow_call:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
 
     steps:
