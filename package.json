@@ -1,0 +1,48 @@
+{
+	"name": "@daneren2005/shared-memory-ecs",
+	"description": "A small, reusable Entity/Component/System core backed by shared memory.",
+	"author": "Scott Jackson",
+	"version": "0.0.1",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			}
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "vite build && tsc --emitDeclarationOnly",
+		"type-check": "tsc --noEmit -p tsconfig.test.json",
+		"lint": "cross-env NODE_ENV=production oxlint .",
+		"lint:fix": "cross-env NODE_ENV=production oxlint --fix .",
+		"test": "vitest run",
+		"release": "semantic-release",
+		"prepare": "husky"
+	},
+	"dependencies": {
+		"@daneren2005/shared-memory-objects": "^0.0.21",
+		"eventemitter3": "^3.1.2"
+	},
+	"devDependencies": {
+		"@semantic-release/changelog": "^6.0.3",
+		"@semantic-release/git": "^10.0.1",
+		"@stylistic/eslint-plugin": "^5.10.0",
+		"@types/node": "^26.1.1",
+		"cross-env": "^10.1.0",
+		"husky": "^9.1.7",
+		"lint-staged": "^17.0.8",
+		"oxlint": "^1.73.0",
+		"oxlint-tsgolint": "^0.24.0",
+		"semantic-release": "^24.2.9",
+		"typescript": "^7.0.2",
+		"vite": "^8.1.4",
+		"vitest": "^4.1.10"
+	}
+}
