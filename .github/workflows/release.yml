@@ -1,11 +1,8 @@
 name: Release
 
 on:
-  workflow_run:
-    workflows: ["Tests"]
+  push:
     branches: [production]
-    types: 
-      - completed
   workflow_dispatch:
 
 permissions:
@@ -15,7 +12,13 @@ permissions:
   id-token: write
 
 jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+    with:
+      node-version: '24'
+
   release:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
