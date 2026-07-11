@@ -2,7 +2,7 @@
 	"name": "@daneren2005/shared-memory-ecs",
 	"description": "A small, reusable Entity/Component/System core backed by shared memory.",
 	"author": "Scott Jackson",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"type": "module",
 	"repository": {
 		"type": "git",
