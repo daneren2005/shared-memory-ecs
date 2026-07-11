@@ -2,10 +2,9 @@ name: Tests
 
 on:
   push:
-    branches-ignore: [production]
+    branches: [ '*' ]
   pull_request:
     branches: [dev]
-  workflow_call:
 
 jobs:
   test:
