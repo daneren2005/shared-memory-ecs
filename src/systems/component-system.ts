@@ -76,7 +76,7 @@ export default abstract class ComponentSystem<C extends ComponentMap = Component
 				}
 
 				message.events.forEach(event => {
-					const entity = this.queryEntityComponentCache[MAIN_QUERY_NAME][event.entityId]?.entity ?? this.entities.find(entity => entity.eid === event.entityId);
+					const entity = this.queryEntityComponentCache[MAIN_QUERY_NAME][event.entityId]?.entity ?? this.entities.find(otherEntity => otherEntity.eid === event.entityId);
 					if(!entity) {
 						console.warn(`Could not find entity with id ${event.entityId}`);
 						return;

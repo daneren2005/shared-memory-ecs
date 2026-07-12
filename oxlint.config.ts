@@ -97,13 +97,6 @@ export default defineConfig({
 		'no-array-sort': 'off',
 		'vitest/no-disabled-tests': 'off',
 		'vitest/warn-todo': 'off',
-		// oxlint doesn't allow expect in afterEach even though it is valid
-		'vitest/no-standalone-expect': 'off',
-		// Used in our copied custom expects
-		'no-this-in-exported-function': 'off',
-
-		// TODO: These rules we should work towards enabling
-		'no-shadow': 'off',
 	},
 	env: {
 		builtin: true,
