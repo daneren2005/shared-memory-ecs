@@ -5,5 +5,6 @@ export default defineConfig({
 		globals: true,
 		environment: 'node',
 		include: ['tests/**/*.spec.ts'],
+		setupFiles: ['@vitest/web-worker'],
 	},
 });

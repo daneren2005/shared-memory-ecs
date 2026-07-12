@@ -78,7 +78,7 @@ console.log(entity.save()); // { health: { maxHealth: 100, health: 90 } }
 ## ComponentSystem workers
 
 `ComponentSystem` needs a `getWorker()` that returns a real `Worker`, and an `updateFunction`. Your
-worker entry file calls `createComponentWorker(updateFunction)`. When Web Workers or
+worker entry file calls `createComponentWorker(self, updateFunction)`. When Web Workers or
 `SharedArrayBuffer` are unavailable it transparently falls back to running the same update function on
 the main thread. Attach any extra per-run data (the equivalent of the old faction/fog-of-war fields)
 by overriding `addDataToWorld(world)`.

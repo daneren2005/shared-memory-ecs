@@ -2,17 +2,25 @@ import type ComponentWorkerMessage from './component-worker-message';
 import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, EntityUpdateComponents, EntityUpdateFunction, UpdateEntityConfigObject } from '../component-system';
 
-// Entry point a game's worker file calls with its update function.  It wires up `self.onmessage`,
+// The slice of the Web Worker global scope createComponentWorker actually touches.  Worker files pass the
+// real `self` (e.g. `createComponentWorker(self, fn)`); passing it explicitly also lets test runners that
+// inject `self` as a module local rather than a true global - like @vitest/web-worker - drive the worker.
+export interface ComponentWorkerScope {
+	onmessage: ((e: MessageEvent) => void) | null
+	postMessage(message: ComponentWorkerMessage): void
+}
+
+// Entry point a game's worker file calls with its update function.  It wires up `scope.onmessage`,
 // caches component blocks by entity id (so subsequent runs only need the id), and posts results back.
-export default function createComponentWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>>(updateFunction: EntityUpdateFunction<C, T>) {
+export default function createComponentWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>>(scope: ComponentWorkerScope, updateFunction: EntityUpdateFunction<C, T>) {
 	const cachedEntityComponent: { [key: number]: T } = {};
 	const cachedQueriesComponent: { [key: string]: { [key: number]: T } } = {};
 
-	self.onmessage = function(e) {
+	scope.onmessage = function(e) {
 		const message = e.data as ComponentWorkerMessage;
 
 		if(message.type === 'init') {
-			postMessageTyped({
+			postMessageTyped(scope, {
 				type: 'loaded',
 			});
 		} else if(message.type === 'run') {
@@ -89,7 +97,7 @@ export default function createComponentWorker<C extends ComponentMap, T extends 
 			});
 			const runTime = performance.now() - start;
 
-			postMessageTyped({
+			postMessageTyped(scope, {
 				type: 'run-complete',
 				runTime,
 				events: entityEvents,
@@ -98,6 +106,6 @@ export default function createComponentWorker<C extends ComponentMap, T extends 
 	};
 }
 
-function postMessageTyped(message: ComponentWorkerMessage) {
-	self.postMessage(message);
+function postMessageTyped(scope: ComponentWorkerScope, message: ComponentWorkerMessage) {
+	scope.postMessage(message);
 }
