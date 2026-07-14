@@ -1,5 +1,5 @@
 import { BaseWorld } from '../../src';
-import type { ComponentDefinition } from '../../src';
+import type { ComponentDefinition, ComponentsOf, EntityConfigOf, EntityFactory } from '../../src';
 
 // A tiny set of memory-backed components used by the tests, mirroring the shape a real game supplies.
 
@@ -8,11 +8,21 @@ export interface HealthComponent {
 	health: number
 	maxHealth: number
 }
+// `maxHealth` is the defining Config prop; `health` is optional, runtime-derived Serialization that is the
+// only thing `save` persists.
+export interface HealthConfig {
+	maxHealth: number
+}
+export interface HealthSerialization {
+	health?: number
+}
 const HEALTH_INDEX = 0;
 const HEALTH_MAX_INDEX = 1;
-export const healthDefinition: ComponentDefinition<HealthComponent, Int32Array, { health?: number, maxHealth: number }> = {
+export const healthDefinition: ComponentDefinition<HealthComponent, Int32Array, HealthConfig, HealthSerialization> = {
 	type: Int32Array,
 	size: 2,
+	// `maxHealth` is what defines a health component; a bare `health` in the config does not trigger a load.
+	loadProperties: ['maxHealth'],
 	load(entity, memory, config) {
 		const index = memory.create([config.health ?? config.maxHealth, config.maxHealth]);
 		const block = memory.getBlock(index);
@@ -34,8 +44,8 @@ export const healthDefinition: ComponentDefinition<HealthComponent, Int32Array, 
 		};
 	},
 	save(component) {
-		const config: { maxHealth: number, health?: number } = { maxHealth: component.maxHealth };
-		// Only persist current health when it differs from full, matching the real game's saver.
+		// maxHealth is Config, so it is not serialized; only persist current health when it differs from full.
+		const config: HealthSerialization = {};
 		if(component.health !== component.maxHealth) {
 			config.health = component.health;
 		}
@@ -48,9 +58,12 @@ export interface MovementComponent {
 	index: number
 	speed: number
 }
+// `speed` is entirely Config (it comes from the type template, like health's maxHealth), so movement has no
+// runtime serialization and defines no `save` - nothing about it needs persisting on the entity.
 export const movementDefinition: ComponentDefinition<MovementComponent, Float32Array, { speed: number }> = {
 	type: Float32Array,
 	size: 1,
+	loadProperties: ['speed'],
 	load(entity, memory, config) {
 		const index = memory.create([config.speed]);
 		const block = memory.getBlock(index);
@@ -65,9 +78,6 @@ export const movementDefinition: ComponentDefinition<MovementComponent, Float32A
 			},
 		};
 	},
-	save(component) {
-		return { speed: component.speed };
-	},
 };
 
 export const registry = {
@@ -75,11 +85,13 @@ export const registry = {
 	movement: movementDefinition,
 };
 
-// Derives the component map type straight from the registry so BaseWorld<Components> is fully typed.
-export type Components = {
-	[K in keyof typeof registry]: ReturnType<(typeof registry)[K]['load']>
-};
+// The component-instance map and flat entity config both derive straight from the registry, so tests get a
+// fully typed world (and `entity.config`) without hand-writing any composite type.  `ComponentsOf` adds the
+// always-present entity component automatically.
+export type Components = ComponentsOf<typeof registry>;
+export type Config = EntityConfigOf<typeof registry>;
+export type TestWorld = BaseWorld<typeof registry>;
 
-export function createTestWorld() {
-	return new BaseWorld<Components>(registry);
+export function createTestWorld(factory?: EntityFactory<Components, Config>): TestWorld {
+	return new BaseWorld(registry, { factory });
 }

@@ -1,6 +1,5 @@
 import { System } from '../../src';
-import type { BaseWorld } from '../../src';
-import { createTestWorld, type Components } from '../fixtures/components';
+import { createTestWorld, type Components, type TestWorld } from '../fixtures/components';
 import { runWorld } from '../fixtures/run-world';
 
 describe('system', () => {
@@ -73,7 +72,7 @@ describe('system', () => {
 class BasicSystem extends System<Components> {
 	public age: number = 0;
 
-	constructor(world: BaseWorld<Components>, options: Partial<{ deltaBetweenRuns: number, firstRun: boolean }> = {}) {
+	constructor(world: TestWorld, options: Partial<{ deltaBetweenRuns: number, firstRun: boolean }> = {}) {
 		super(world, {
 			name: 'BasicSystem',
 			...options,

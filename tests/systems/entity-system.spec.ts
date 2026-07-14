@@ -1,9 +1,9 @@
 import { EntitySystem } from '../../src';
-import type { BaseEntity, BaseWorld } from '../../src';
-import { createTestWorld, type Components } from '../fixtures/components';
+import type { BaseEntity } from '../../src';
+import { createTestWorld, type Components, type TestWorld } from '../fixtures/components';
 
 describe('entity-system', () => {
-	let world: BaseWorld<Components>;
+	let world: TestWorld;
 	beforeEach(() => {
 		world = createTestWorld();
 	});
@@ -12,13 +12,14 @@ describe('entity-system', () => {
 		let system = new StubSystem(world, ['health']);
 		world.addSystem(system);
 
-		let entity1 = createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		let entity2 = createEntity({ health: { maxHealth: 100 } });
-		createEntity({ movement: { speed: 100 } });
+		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
+		let entity2 = createEntity({ maxHealth: 100 });
+		createEntity({ speed: 100 });
 		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, entity2.eid]);
 
-		// Reloading the saved entities into a fresh world reproduces the same membership
-		let saves = world.entities.map(e => e.save());
+		// Reloading the saved entities into a fresh world reproduces the same membership.  save carries only
+		// serialization, so reload layers it over each entity's defining config (its template).
+		let saves = world.entities.map(e => ({ ...e.config, ...e.save() }));
 		let newWorld = createTestWorld();
 		let newSystem = new StubSystem(newWorld, ['health']);
 		saves.forEach(save => newWorld.loadEntity(save));
@@ -30,12 +31,13 @@ describe('entity-system', () => {
 		let system = new StubSystem(world, ['health', 'movement']);
 		world.addSystem(system);
 
-		let entity1 = createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		createEntity({ health: { maxHealth: 100 } });
-		createEntity({ movement: { speed: 100 } });
+		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
+		createEntity({ maxHealth: 100 });
+		createEntity({ speed: 100 });
 		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid]);
 
-		let saves = world.entities.map(e => e.save());
+		// save carries only serialization, so reload layers it over each entity's defining config.
+		let saves = world.entities.map(e => ({ ...e.config, ...e.save() }));
 		let newWorld = createTestWorld();
 		let newSystem = new StubSystem(newWorld, ['health', 'movement']);
 		saves.forEach(save => newWorld.loadEntity(save));
@@ -46,9 +48,9 @@ describe('entity-system', () => {
 		let system = new StubSystem(world, ['health']);
 		world.addSystem(system);
 
-		let entity1 = createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		let entity2 = createEntity({ health: { maxHealth: 100 } });
-		let otherEntity = createEntity({ movement: { speed: 100 } });
+		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
+		let entity2 = createEntity({ maxHealth: 100 });
+		let otherEntity = createEntity({ speed: 100 });
 		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, entity2.eid]);
 
 		// Do not add from other component being added
@@ -74,7 +76,7 @@ describe('entity-system', () => {
 });
 
 class StubSystem extends EntitySystem<Components> {
-	constructor(world: BaseWorld<Components>, components: Array<keyof Components>) {
+	constructor(world: TestWorld, components: Array<keyof Components>) {
 		super(world, {
 			name: 'StubSystem',
 			components,

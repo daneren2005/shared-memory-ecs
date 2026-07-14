@@ -1,15 +1,17 @@
 import type BaseWorld from '../world';
-import type { ComponentMap } from '../component-definition';
+import type { ComponentDefinitionMap, ComponentMap } from '../component-definition';
 
 // Base system: runs on an optional fixed timestep (deltaBetweenRuns) and is driven by BaseWorld#update.
+// Systems only care about the component map `C`, not the World's registry (`R`) or config (`Cfg`), so they
+// reference the World through the widened `ComponentDefinitionMap` and let `Cfg` default.
 export default abstract class System<C extends ComponentMap = ComponentMap> {
-	world: BaseWorld<C>;
+	world: BaseWorld<ComponentDefinitionMap, C>;
 	name: string;
 	currentDelta: number = 0;
 	deltaBetweenRuns: number;
 	firstRun: boolean;
 
-	constructor(world: BaseWorld<C>, options: SystemConfig = { name: 'System' }) {
+	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: SystemConfig = { name: 'System' }) {
 		this.name = options.name;
 		this.world = world;
 

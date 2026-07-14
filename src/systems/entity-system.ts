@@ -1,6 +1,6 @@
 import type BaseWorld from '../world';
 import type BaseEntity from '../entity';
-import type { ComponentMap } from '../component-definition';
+import type { ComponentDefinitionMap, ComponentMap } from '../component-definition';
 import IterableSystem, { type IterableSystemConfig } from './iterable-system';
 
 // Iterates the entities that own a given set of components on the main thread.  Entities are added
@@ -9,7 +9,7 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 	entities: Array<T> = [];
 	options: EntitySystemConfig<C>;
 
-	constructor(world: BaseWorld<C>, options: EntitySystemConfig<C> = { name: 'EntitySystem' }) {
+	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: EntitySystemConfig<C> = { name: 'EntitySystem' }) {
 		if(!options.iterationsPerCheck) {
 			options.iterationsPerCheck = 10;
 		}
@@ -35,17 +35,17 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 	}
 
 	getIterables(): Array<T> {
-		return this.entities.filter(entity => !entity.dead);
+		return this.entities.filter(entity => !entity.components.entity.dead);
 	}
 	updateIterable(entity: T, elapsedTime: number): void {
-		if(entity.dead) {
+		if(entity.components.entity.dead) {
 			return;
 		}
 
 		this.updateEntity(entity, elapsedTime);
 	}
 	filterEntity(entity: BaseEntity<C>): boolean {
-		return !entity.isStatic;
+		return !entity.components.entity.isStatic;
 	}
 	isEntityInSystem(entity: BaseEntity<C>) {
 		return this.entities.indexOf(entity as T) !== -1;

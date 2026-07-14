@@ -76,6 +76,13 @@ export default function createComponentWorker<C extends ComponentMap, T extends 
 						args: [componentName, prop, value],
 					});
 				},
+				entityDied(entityId: number) {
+					entityEvents.push({
+						entityId,
+						event: 'death',
+						args: [],
+					});
+				},
 			};
 			if(updateFunction.preRun) {
 				updateFunction.preRun(message.world, entities, queries, callbacks);

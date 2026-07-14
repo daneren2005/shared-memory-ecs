@@ -1,6 +1,6 @@
 import type BaseWorld from '../world';
 import type BaseEntity from '../entity';
-import type { BaseComponent, ComponentMap } from '../component-definition';
+import type { BaseComponent, ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from '../component-definition';
 import type { ComponentTypedArray } from '../memory-component';
 import System, { type SystemConfig } from './system';
 import type ComponentWorkerMessage from './workers/component-worker-message';
@@ -31,7 +31,7 @@ export default abstract class ComponentSystem<C extends ComponentMap = Component
 	// Optional hook for subclasses to attach extra data to the world object sent to the worker.
 	addDataToWorld?(world: ComponentSystemWorld): void;
 
-	constructor(world: BaseWorld<C>, options: ComponentSystemConfig<C, T>) {
+	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: ComponentSystemConfig<C, T>) {
 		super(world, options);
 		this.options = options;
 		Object.keys(this.options.queries ?? {}).forEach(queryName => {
@@ -151,7 +151,7 @@ export default abstract class ComponentSystem<C extends ComponentMap = Component
 			cache = this.queryEntityComponentCache[queryName] = {};
 		}
 		entities.forEach(entity => {
-			if(entity.dead) {
+			if(entity.components.entity.dead) {
 				return;
 			}
 
@@ -164,7 +164,7 @@ export default abstract class ComponentSystem<C extends ComponentMap = Component
 					...query.optional ?? [],
 				].forEach(componentName => {
 					const component = entity.components[componentName];
-					const memoryComponent = this.world.components[componentName];
+					const memoryComponent = (this.world.registry as RegisteredComponentRegistry<C>)[componentName].memoryComponent;
 					if(component && memoryComponent) {
 						components[componentName] = memoryComponent.getBlock(component.index) as T[typeof componentName];
 					}
@@ -198,7 +198,7 @@ export default abstract class ComponentSystem<C extends ComponentMap = Component
 		return this.entities.indexOf(entity) !== -1;
 	}
 	private matchesQuery(entity: BaseEntity<C>, query: ComponentSystemQuery<C>): boolean {
-		if(entity.dead) {
+		if(entity.components.entity.dead) {
 			return false;
 		}
 
@@ -303,6 +303,7 @@ export interface ComponentSystemWorld {
 }
 export interface ComponentSystemCallbacks<C extends ComponentMap = ComponentMap> {
 	entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]): void
+	entityDied(entityId: number): void
 }
 
 export interface ComponentSystemQuery<C extends ComponentMap = ComponentMap> {

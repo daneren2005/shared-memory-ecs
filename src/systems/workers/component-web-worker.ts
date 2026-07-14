@@ -30,6 +30,13 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 						args: [componentName, prop, value],
 					});
 				},
+				entityDied(entityId: number) {
+					entityEvents.push({
+						entityId,
+						event: 'death',
+						args: [],
+					});
+				},
 			};
 			if(this.updateFunction.preRun) {
 				this.updateFunction.preRun(message.world, message.entities as Array<UpdateEntityConfigObject<T>>, message.queries as EntityQueryComponents<C>, callbacks);

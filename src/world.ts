@@ -1,53 +1,82 @@
 import { EventEmitter } from 'eventemitter3';
 import { MAX_BYTE_OFFSET_LENGTH, MemoryHeap } from '@daneren2005/shared-memory-objects';
 import MemoryComponent from './memory-component';
-import BaseEntity from './entity';
+import type BaseEntity from './entity';
 import type System from './systems/system';
 import EntitySystem from './systems/entity-system';
 import ComponentSystem from './systems/component-system';
-import type { ComponentMap, ComponentRegistry } from './component-definition';
+import type {
+	BaseComponent, ComponentDefinitionMap, ComponentMap, ComponentRegistry, ComponentsOf,
+	EntityConfigOf, RegisteredComponentDefinition, RegisteredComponentRegistry,
+} from './component-definition';
+import { entityDefinition, type EntityComponent } from './entity-component';
+import EntityFactory from './entity-factory';
 
 const DEFAULT_HEAP_SIZE = MAX_BYTE_OFFSET_LENGTH;
 
-export interface WorldOptions {
+export interface WorldOptions<C extends ComponentMap = ComponentMap, Cfg = any> {
 	heapSize?: number
+	// Supplies the type -> base config templates; defaults to an empty factory that loads configs as-is.
+	factory?: EntityFactory<C, Cfg>
 }
 
 // A simple wrapper around a set of entities + systems.  On construction it creates one
 // MemoryComponent per entry in the component registry so entities can load/save themselves without
 // each game re-declaring loaders/savers.  It has no game specific load/save/terrain/faction logic -
 // that all belongs in the game that consumes this library.
-export default class BaseWorld<C extends ComponentMap = ComponentMap> extends EventEmitter {
+// The World is generic over `R`, the registry of component definitions a game supplies.  Both the
+// component-instance map `C` and the flat entity config `Cfg` are derived from `R` (via `ComponentsOf` /
+// `EntityConfigOf`) and default off it, so `new BaseWorld(registry)` infers `R` from its argument and every
+// entity's components and config are typed without the game declaring any composite types by hand.
+export default class BaseWorld<
+	R extends ComponentDefinitionMap = ComponentDefinitionMap,
+	C extends ComponentMap = ComponentsOf<R>,
+	Cfg = EntityConfigOf<R>,
+> extends EventEmitter {
 	heap: MemoryHeap;
-	registry: ComponentRegistry<C>;
-	components: { [K in keyof C]: MemoryComponent };
+	// The entity component is always registered on top of the game's components so every entity can be
+	// given one automatically.  Each registered definition carries its own MemoryComponent, so a
+	// component's memory pool is reachable straight from `registry[name].memoryComponent`.
+	registry: RegisteredComponentRegistry<C> & { entity: RegisteredComponentDefinition<EntityComponent> };
+	// Every entity is built through the factory, which expands its `type` against the registered templates.
+	factory: EntityFactory<C, Cfg>;
 
-	entities: Array<BaseEntity<C>> = [];
-	entitiesByEid: { [eid: number]: BaseEntity<C> } = {};
+	entities: Array<BaseEntity<C, Cfg>> = [];
+	entitiesByEid: { [eid: number]: BaseEntity<C, Cfg> } = {};
 	systems: Array<System<C>> = [];
 
 	gameTime = 0;
 	destroyed = false;
 
-	constructor(registry: ComponentRegistry<C>, options: WorldOptions = {}) {
+	// The game supplies its own components as `R`; the entity component is added automatically, so it must not
+	// be part of the passed registry.
+	constructor(registry: R, options: WorldOptions<C, Cfg> = {}) {
 		super();
 
-		this.registry = registry;
 		this.heap = new MemoryHeap({ bufferSize: options.heapSize ?? DEFAULT_HEAP_SIZE });
 
-		const components = {} as { [K in keyof C]: MemoryComponent };
-		for(let name of Object.keys(registry) as Array<keyof C>) {
-			const definition = registry[name];
-			components[name] = new MemoryComponent(this.heap, definition.type, definition.size);
+		// Register every supplied definition (plus the always-present entity component) by attaching a freshly
+		// allocated MemoryComponent to it, so the memory pool lives alongside the definition on the registry.
+		const inputRegistry = { ...registry, entity: entityDefinition } as ComponentRegistry<C> & { entity: typeof entityDefinition };
+		const registry_: Record<string, RegisteredComponentDefinition<BaseComponent>> = {};
+		for(let name of Object.keys(inputRegistry)) {
+			const definition = inputRegistry[name as keyof typeof inputRegistry];
+			registry_[name] = {
+				...definition,
+				memoryComponent: new MemoryComponent(this.heap, definition.type, definition.size),
+			};
 		}
-		this.components = components;
+		this.registry = registry_ as RegisteredComponentRegistry<C> & { entity: RegisteredComponentDefinition<EntityComponent> };
+
+		this.factory = options.factory ?? new EntityFactory<C, Cfg>();
+		this.factory.world = this;
 	}
 
 	async init() {
 		await Promise.all(this.systems.map(system => system.init()).filter(promise => promise instanceof Promise));
 	}
 
-	addEntity(entity: BaseEntity<C>, created = true): BaseEntity<C> {
+	addEntity(entity: BaseEntity<C, Cfg>, created = true): BaseEntity<C, Cfg> {
 		this.entities.push(entity);
 		this.entitiesByEid[entity.eid] = entity;
 		entity.world = this;
@@ -58,6 +87,10 @@ export default class BaseWorld<C extends ComponentMap = ComponentMap> extends Ev
 		entity.on('component-removed', (name: keyof C) => {
 			this.removeEntityFromComponentSystem(entity, name);
 		});
+		// killEntity / killEntityWorker flag the entity dead and emit `death`; remove it here.
+		entity.on('death', () => {
+			this.removeEntity(entity);
+		});
 
 		if(created) {
 			entity.finishLoading();
@@ -66,10 +99,11 @@ export default class BaseWorld<C extends ComponentMap = ComponentMap> extends Ev
 
 		return entity;
 	}
-	loadEntity(config: any, created = true): BaseEntity<C> {
-		return this.addEntity(new BaseEntity<C>(this, config), created);
+	loadEntity(config: Cfg, created = true): BaseEntity<C, Cfg> {
+		// The factory expands the config's `type` against the registered templates before building the entity.
+		return this.factory.loadEntity(config, created);
 	}
-	removeEntity(entity: BaseEntity<C>) {
+	removeEntity(entity: BaseEntity<C, Cfg>) {
 		let index = this.entities.indexOf(entity);
 		if(index !== -1) {
 			this.entities.splice(index, 1);
@@ -79,7 +113,7 @@ export default class BaseWorld<C extends ComponentMap = ComponentMap> extends Ev
 
 		entity.deleteAllComponentMemory();
 	}
-	getEntityByEid(eid: number): BaseEntity<C> | undefined {
+	getEntityByEid(eid: number): BaseEntity<C, Cfg> | undefined {
 		return this.entitiesByEid[eid];
 	}
 

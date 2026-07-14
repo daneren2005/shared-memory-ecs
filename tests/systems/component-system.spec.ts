@@ -1,12 +1,15 @@
 import { ComponentSystem } from '../../src';
-import type { BaseEntity, BaseWorld, ComponentSystemQuery, ComponentSystemWorld } from '../../src';
-import { createTestWorld, type Components } from '../fixtures/components';
+import type { BaseEntity, ComponentSystemQuery, ComponentSystemWorld } from '../../src';
+import { createTestWorld, type Components, type TestWorld } from '../fixtures/components';
 import { damageUpdate } from '../fixtures/damage-update';
+import { killUpdate } from '../fixtures/kill-update';
 
 // Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.  The noop worker backs
-// the membership tests (which never call run()); the damage worker backs the run() flow tests.
+// the membership tests (which never call run()); the damage worker backs the run() flow tests; the kill
+// worker backs the death tests.
 const NOOP_WORKER_URL = new URL('../fixtures/noop.worker.ts', import.meta.url);
 const DAMAGE_WORKER_URL = new URL('../fixtures/damage.worker.ts', import.meta.url);
+const KILL_WORKER_URL = new URL('../fixtures/kill.worker.ts', import.meta.url);
 
 // Every test runs against both backends: 'main-thread' uses the in-process ComponentWebWorker
 // (forceMainThread), 'worker' uses a real worker module driven through createComponentWorker.  Both must
@@ -27,7 +30,7 @@ function flush(): Promise<void> {
 }
 
 describe.each(MODES)('component-system (%s)', (mode) => {
-	let world: BaseWorld<Components>;
+	let world: TestWorld;
 	let systems: Array<ComponentSystem<Components>>;
 	beforeEach(() => {
 		world = createTestWorld();
@@ -51,36 +54,36 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 	it('with single component', () => {
 		let system = useSystem(new StubSystem(world, mode, { required: ['health'] }));
 
-		let entity1 = createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		let entity2 = createEntity({ health: { maxHealth: 100 } });
-		createEntity({ movement: { speed: 100 } });
+		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
+		let entity2 = createEntity({ maxHealth: 100 });
+		createEntity({ speed: 100 });
 		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, entity2.eid]);
 	});
 
 	it('with multiple component', () => {
 		let system = useSystem(new StubSystem(world, mode, { required: ['health', 'movement'] }));
 
-		let entity1 = createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		createEntity({ health: { maxHealth: 100 } });
-		createEntity({ movement: { speed: 100 } });
+		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
+		createEntity({ maxHealth: 100 });
+		createEntity({ speed: 100 });
 		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid]);
 	});
 
 	it('with not components', () => {
 		let system = useSystem(new StubSystem(world, mode, { required: ['health'], not: ['movement'] }));
 
-		createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		let entity2 = createEntity({ health: { maxHealth: 100 } });
-		createEntity({ movement: { speed: 100 } });
+		createEntity({ maxHealth: 100, speed: 100 });
+		let entity2 = createEntity({ maxHealth: 100 });
+		createEntity({ speed: 100 });
 		expect(system.entities.map(e => e.eid)).toEqual([entity2.eid]);
 	});
 
 	it('with dynamically added components in required list', () => {
 		let system = useSystem(new StubSystem(world, mode, { required: ['health', 'movement'] }));
 
-		let entity1 = createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		createEntity({ health: { maxHealth: 100 } });
-		let otherEntity = createEntity({ health: { maxHealth: 100 } });
+		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
+		createEntity({ maxHealth: 100 });
+		let otherEntity = createEntity({ maxHealth: 100 });
 		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid]);
 
 		// Do add from correct component being added
@@ -94,9 +97,9 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 	it('with dynamically added components in not list', () => {
 		let system = useSystem(new StubSystem(world, mode, { required: ['health'], not: ['movement'] }));
 
-		createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		let entity2 = createEntity({ health: { maxHealth: 100 } });
-		let otherEntity = createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
+		createEntity({ maxHealth: 100, speed: 100 });
+		let entity2 = createEntity({ maxHealth: 100 });
+		let otherEntity = createEntity({ maxHealth: 100, speed: 100 });
 		expect(system.entities.map(e => e.eid)).toEqual([entity2.eid]);
 
 		otherEntity.removeComponent('movement');
@@ -116,8 +119,8 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			},
 		}));
 
-		let movingEntity = createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		createEntity({ health: { maxHealth: 100 } });
+		let movingEntity = createEntity({ maxHealth: 100, speed: 100 });
+		createEntity({ maxHealth: 100 });
 
 		expect(system.getQueryEntityEids('onlyMovement')).toEqual([movingEntity.eid]);
 	});
@@ -132,8 +135,8 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			},
 		}));
 
-		let movingEntity = createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		let staticEntity = createEntity({ health: { maxHealth: 100 } });
+		let movingEntity = createEntity({ maxHealth: 100, speed: 100 });
+		let staticEntity = createEntity({ maxHealth: 100 });
 
 		expect(system.getQueryEntityEids('onlyMovement')).toEqual([movingEntity.eid]);
 
@@ -155,8 +158,8 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			},
 		}));
 
-		createEntity({ health: { maxHealth: 100 }, movement: { speed: 100 } });
-		let staticEntity = createEntity({ health: { maxHealth: 100 } });
+		createEntity({ maxHealth: 100, speed: 100 });
+		let staticEntity = createEntity({ maxHealth: 100 });
 
 		expect(system.getQueryEntityEids('noMovement')).toEqual([staticEntity.eid]);
 
@@ -170,7 +173,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 	it('removing an entity adds its eid to removedEntityBuffer', () => {
 		let system = useSystem(new StubSystem(world, mode, { required: ['health'] }));
 
-		let entity = createEntity({ health: { maxHealth: 100 } });
+		let entity = createEntity({ maxHealth: 100 });
 		expect(system.getRemovedEntityBuffer()).toEqual([]);
 
 		world.removeEntity(entity);
@@ -186,7 +189,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			let system = useSystem(new DamageSystem(world, mode));
 			await system.init();
 
-			let entity = createEntity({ health: { maxHealth: 100 } });
+			let entity = createEntity({ maxHealth: 100 });
 			let events: Array<number> = [];
 			entity.on('component-property-updated', (_component, _prop, value: number) => {
 				events.push(value);
@@ -203,7 +206,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			let system = useSystem(new DamageSystem(world, mode));
 			await system.init();
 
-			let entity = createEntity({ health: { maxHealth: 100 } });
+			let entity = createEntity({ maxHealth: 100 });
 
 			system.run(16);
 			await flush();
@@ -220,7 +223,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			system.damagePerRun = 5;
 			await system.init();
 
-			let entity = createEntity({ health: { maxHealth: 100 } });
+			let entity = createEntity({ maxHealth: 100 });
 
 			system.run(16);
 			await flush();
@@ -232,8 +235,8 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			let system = useSystem(new DamageSystem(world, mode));
 			await system.init();
 
-			let matching = createEntity({ health: { maxHealth: 100 } });
-			let ignored = createEntity({ movement: { speed: 100 } });
+			let matching = createEntity({ maxHealth: 100 });
+			let ignored = createEntity({ speed: 100 });
 
 			system.run(16);
 			await flush();
@@ -241,11 +244,26 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(matching.components.health?.health).toEqual(99);
 			expect(ignored.components.health).toBeUndefined();
 		});
+
+		it('killEntityWorker removes the entity from the world', async () => {
+			let system = useSystem(new KillSystem(world, mode));
+			await system.init();
+
+			let entity = createEntity({ maxHealth: 100 });
+			expect(world.entities).toContain(entity);
+
+			system.run(16);
+			await flush();
+
+			// The worker flagged it dead in shared memory and reported the death back, so the world removed it.
+			expect(world.entities).not.toContain(entity);
+			expect(system.isEntityInSystem(entity)).toEqual(false);
+		});
 	});
 });
 
 class StubSystem extends ComponentSystem<Components> {
-	constructor(world: BaseWorld<Components>, mode: Mode, options: StubOptions) {
+	constructor(world: TestWorld, mode: Mode, options: StubOptions) {
 		super(world, {
 			name: 'StubSystem',
 			updateFunction: () => {},
@@ -269,7 +287,7 @@ class StubSystem extends ComponentSystem<Components> {
 class DamageSystem extends ComponentSystem<Components> {
 	damagePerRun?: number;
 
-	constructor(world: BaseWorld<Components>, mode: Mode) {
+	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
 			name: 'DamageSystem',
 			required: ['health'],
@@ -283,5 +301,19 @@ class DamageSystem extends ComponentSystem<Components> {
 		if(this.damagePerRun !== undefined) {
 			world.damage = this.damagePerRun;
 		}
+	}
+}
+
+class KillSystem extends ComponentSystem<Components> {
+	constructor(world: TestWorld, mode: Mode) {
+		super(world, {
+			name: 'KillSystem',
+			required: ['health'],
+			// The entity component is pulled into the query so killEntityWorker can reach its shared block.
+			optional: ['entity'],
+			updateFunction: killUpdate,
+			forceMainThread: mode === 'main-thread',
+			getWorker: () => new Worker(KILL_WORKER_URL, { type: 'module' }),
+		});
 	}
 }
