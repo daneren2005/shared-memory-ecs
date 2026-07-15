@@ -3,13 +3,18 @@ import type { BaseEntity, ComponentSystemQuery, ComponentSystemWorld } from '../
 import { createTestWorld, type Components, type TestWorld } from '../fixtures/components';
 import { damageUpdate } from '../fixtures/damage-update';
 import { killUpdate } from '../fixtures/kill-update';
+import { spawnUpdate } from '../fixtures/spawn-update';
+import { queryTargetUpdate } from '../fixtures/query-target-update';
 
 // Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.  The noop worker backs
 // the membership tests (which never call run()); the damage worker backs the run() flow tests; the kill
-// worker backs the death tests.
+// worker backs the death tests; the spawn worker backs the creation tests; the query-target worker backs
+// the sub-query event-routing tests.
 const NOOP_WORKER_URL = new URL('../fixtures/noop.worker.ts', import.meta.url);
 const DAMAGE_WORKER_URL = new URL('../fixtures/damage.worker.ts', import.meta.url);
 const KILL_WORKER_URL = new URL('../fixtures/kill.worker.ts', import.meta.url);
+const SPAWN_WORKER_URL = new URL('../fixtures/spawn.worker.ts', import.meta.url);
+const QUERY_TARGET_WORKER_URL = new URL('../fixtures/query-target.worker.ts', import.meta.url);
 
 // Every test runs against both backends: 'main-thread' uses the in-process ComponentWebWorker
 // (forceMainThread), 'worker' uses a real worker module driven through createComponentWorker.  Both must
@@ -259,6 +264,73 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(world.entities).not.toContain(entity);
 			expect(system.isEntityInSystem(entity)).toEqual(false);
 		});
+
+		it('createEntityWorker adds the requested entity to the world', async () => {
+			let system = useSystem(new SpawnSystem(world, mode));
+			await system.init();
+
+			let entity = createEntity({ maxHealth: 100 });
+			expect(world.entities).toHaveLength(1);
+
+			system.run(16);
+			await flush();
+
+			// The worker can't create the entity itself, so it asked the main thread to; loadEntity ran on
+			// run-complete, leaving the original entity plus the one it spawned.
+			expect(world.entities).toHaveLength(2);
+			let spawned = world.entities.find(other => other !== entity);
+			expect(spawned?.components.health?.maxHealth).toEqual(10);
+			expect(spawned?.components.health?.health).toEqual(10);
+
+			// The spawned entity only exists after the run, so the system that requested it picks it up on the
+			// next run rather than the one that created it.
+			expect(system.isEntityInSystem(spawned!)).toEqual(true);
+		});
+
+		// Regression: events for entities the system only knows through a sub-query (never its main query)
+		// must still route back to the entity.  These entities are absent from the main query component cache,
+		// so routing them relies on the world's getEntityByEid fallback.
+		it('routes a death event to an entity only present in a sub-query', async () => {
+			let system = useSystem(new QueryTargetSystem(world, mode));
+			await system.init();
+
+			// The killer is the only main-query (movement) entity; the target has health but no movement, so it
+			// lives in the `targets` sub-query and is never part of the system's main query.
+			createEntity({ speed: 100 });
+			let target = createEntity({ maxHealth: 100 });
+			expect(system.isEntityInSystem(target)).toEqual(false);
+
+			let died = false;
+			target.on('death', () => {
+				died = true;
+			});
+
+			system.run(16);
+			await flush();
+
+			expect(died).toEqual(true);
+			// The death event ran the world's cleanup, removing the sub-query-only entity.
+			expect(world.entities).not.toContain(target);
+		});
+
+		it('routes a component-property-updated event to an entity only present in a sub-query', async () => {
+			let system = useSystem(new QueryTargetSystem(world, mode));
+			await system.init();
+
+			createEntity({ speed: 100 });
+			let target = createEntity({ maxHealth: 100 });
+			expect(system.isEntityInSystem(target)).toEqual(false);
+
+			let events: Array<number> = [];
+			target.on('component-property-updated', (_component, _prop, value: number) => {
+				events.push(value);
+			});
+
+			system.run(16);
+			await flush();
+
+			expect(events).toEqual([50]);
+		});
 	});
 });
 
@@ -314,6 +386,39 @@ class KillSystem extends ComponentSystem<Components> {
 			updateFunction: killUpdate,
 			forceMainThread: mode === 'main-thread',
 			getWorker: () => new Worker(KILL_WORKER_URL, { type: 'module' }),
+		});
+	}
+}
+
+class SpawnSystem extends ComponentSystem<Components> {
+	constructor(world: TestWorld, mode: Mode) {
+		super(world, {
+			name: 'SpawnSystem',
+			required: ['health'],
+			updateFunction: spawnUpdate,
+			forceMainThread: mode === 'main-thread',
+			getWorker: () => new Worker(SPAWN_WORKER_URL, { type: 'module' }),
+		});
+	}
+}
+
+class QueryTargetSystem extends ComponentSystem<Components> {
+	constructor(world: TestWorld, mode: Mode) {
+		super(world, {
+			// Main query is movement-only, so health entities acted on below are never part of it.
+			name: 'QueryTargetSystem',
+			required: ['movement'],
+			updateFunction: queryTargetUpdate,
+			forceMainThread: mode === 'main-thread',
+			getWorker: () => new Worker(QUERY_TARGET_WORKER_URL, { type: 'module' }),
+			queries: {
+				// The entity component is pulled in so killEntityWorker can reach the target's shared block.
+				targets: {
+					required: ['health'],
+					not: ['movement'],
+					optional: ['entity'],
+				},
+			},
 		});
 	}
 }

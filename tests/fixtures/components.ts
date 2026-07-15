@@ -80,9 +80,44 @@ export const movementDefinition: ComponentDefinition<MovementComponent, Float32A
 	},
 };
 
+// A deferred component (loadInFinishLoading) that mirrors the lumbermill/trees use case: it records how many
+// OTHER entities exist in the world.  Because it reads the rest of the world, its count is only correct once
+// every entity in a load batch exists - which is exactly why loading it is deferred to finishLoading rather
+// than running as each entity is created.
+export interface NeighborsComponent {
+	index: number
+	count: number
+}
+export interface NeighborsConfig {
+	countsNeighbors: boolean
+}
+export const neighborsDefinition: ComponentDefinition<NeighborsComponent, Int32Array, NeighborsConfig> = {
+	type: Int32Array,
+	size: 1,
+	loadProperties: ['countsNeighbors'],
+	// Wait for finishLoading so every other entity is already loaded before we count them.
+	loadInFinishLoading: true,
+	load(entity, memory) {
+		const count = entity.world.entities.filter(other => other !== entity).length;
+		const index = memory.create([count]);
+		const block = memory.getBlock(index);
+
+		return {
+			index,
+			get count() {
+				return block[0];
+			},
+			set count(value: number) {
+				block[0] = value;
+			},
+		};
+	},
+};
+
 export const registry = {
 	health: healthDefinition,
 	movement: movementDefinition,
+	neighbors: neighborsDefinition,
 };
 
 // The component-instance map and flat entity config both derive straight from the registry, so tests get a

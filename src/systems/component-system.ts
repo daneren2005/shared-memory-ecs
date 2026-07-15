@@ -76,13 +76,24 @@ export default abstract class ComponentSystem<C extends ComponentMap = Component
 				}
 
 				message.events.forEach(event => {
-					const entity = this.queryEntityComponentCache[MAIN_QUERY_NAME][event.entityId]?.entity ?? this.entities.find(otherEntity => otherEntity.eid === event.entityId);
+					// A system can report events (deaths, component changes) for entities it only knows through a
+					// sub-query - e.g. a collision system that kills a station it found in a spatial query but that
+					// isn't in its main query.  Look the entity up on the world so those still route even when the
+					// entity was never part of this system's main query cache.
+					const entity = this.world.getEntityByEid(event.entityId);
 					if(!entity) {
 						console.warn(`Could not find entity with id ${event.entityId}`);
 						return;
 					}
 
 					entity.emit(event.event, ...event.args);
+				});
+
+				// Fulfill any creation requests after deaths, so an entity created this run isn't immediately removed.
+				// loadEntity runs the full factory expansion + finishLoading and emits `entity-added`, so every system
+				// (including this one) picks the new entity up on the next run.
+				message.created.forEach(config => {
+					this.world.loadEntity(config);
 				});
 			}
 		};
@@ -301,9 +312,18 @@ export interface ComponentSystemWorld {
 	elapsedTime: number
 	[key: string]: unknown
 }
+// A flat entity config a worker asks the main thread to create.  Kept as a plain record (not the game's `Cfg`)
+// because ComponentSystem is generic over `C`, not `Cfg`; the main thread hands it straight to world.loadEntity,
+// whose factory expands its `type` against the registered templates.
+export type CreateEntityConfig = Record<string, unknown>;
+
 export interface ComponentSystemCallbacks<C extends ComponentMap = ComponentMap> {
 	entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]): void
 	entityDied(entityId: number): void
+	// Requests that the main thread create an entity from `config` once the run completes.  Unlike killing (which
+	// flips an existing shared-memory flag in place), creation can't happen in the worker, so it is deferred to the
+	// main thread where eid generation, allocation, and factory expansion already live.
+	createEntity(config: CreateEntityConfig): void
 }
 
 export interface ComponentSystemQuery<C extends ComponentMap = ComponentMap> {

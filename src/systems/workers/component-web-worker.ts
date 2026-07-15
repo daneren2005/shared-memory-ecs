@@ -21,6 +21,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 			});
 		} else if(message.type === 'run') {
 			let entityEvents: Array<{ entityId: number, event: string, args: Array<any> }> = [];
+			let createdEntities: Array<Record<string, unknown>> = [];
 
 			let callbacks: ComponentSystemCallbacks<C> = {
 				entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]) {
@@ -36,6 +37,9 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 						event: 'death',
 						args: [],
 					});
+				},
+				createEntity(config: Record<string, unknown>) {
+					createdEntities.push(config);
 				},
 			};
 			if(this.updateFunction.preRun) {
@@ -60,6 +64,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 				type: 'run-complete',
 				runTime: 0,
 				events: entityEvents,
+				created: createdEntities,
 			});
 		}
 	}

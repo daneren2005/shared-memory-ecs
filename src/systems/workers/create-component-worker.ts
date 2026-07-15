@@ -26,6 +26,7 @@ export default function createComponentWorker<C extends ComponentMap, T extends 
 		} else if(message.type === 'run') {
 			const start = performance.now();
 			let entityEvents: Array<{ entityId: number, event: string, args: Array<any> }> = [];
+			let createdEntities: Array<Record<string, unknown>> = [];
 
 			let queries: { [key: string]: Array<{ entityId: number, components: T }> } = {};
 			Object.entries(message.queries).forEach(([queryKey, entities]) => {
@@ -83,6 +84,9 @@ export default function createComponentWorker<C extends ComponentMap, T extends 
 						args: [],
 					});
 				},
+				createEntity(config: Record<string, unknown>) {
+					createdEntities.push(config);
+				},
 			};
 			if(updateFunction.preRun) {
 				updateFunction.preRun(message.world, entities, queries, callbacks);
@@ -108,6 +112,7 @@ export default function createComponentWorker<C extends ComponentMap, T extends 
 				type: 'run-complete',
 				runTime,
 				events: entityEvents,
+				created: createdEntities,
 			});
 		}
 	};

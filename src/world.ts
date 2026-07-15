@@ -20,6 +20,19 @@ export interface WorldOptions<C extends ComponentMap = ComponentMap, Cfg = any> 
 	factory?: EntityFactory<C, Cfg>
 }
 
+// The serialized shape of a whole world: the flat list of entity configs to (re)build plus the world clocks.  A
+// game can layer its own fields on top; the World itself only needs `entities` (the same flat `Cfg` objects
+// `loadEntity` / `save` deal with) and the optional time state that `load` restores.
+export interface WorldConfig<Cfg = any> {
+	entities: Array<Cfg>
+	// Simulation clock; restored so a saved world resumes at the same in-game time.  Defaults to 0.
+	gameTime?: number
+	// Real elapsed play time; kept separate from gameTime and unaffected by timeScale.  Defaults to 0.
+	playerTime?: number
+	// Simulation speed multiplier.  Defaults to 1.
+	timeScale?: number
+}
+
 // A simple wrapper around a set of entities + systems.  On construction it creates one
 // MemoryComponent per entry in the component registry so entities can load/save themselves without
 // each game re-declaring loaders/savers.  It has no game specific load/save/terrain/faction logic -
@@ -46,6 +59,14 @@ export default class BaseWorld<
 	systems: Array<System<C>> = [];
 
 	gameTime = 0;
+	// Real (unscaled) time the player has spent in the world.  Unlike gameTime it keeps advancing while paused and
+	// is never multiplied by timeScale.
+	playerTime = 0;
+	// Multiplier applied to elapsedTime before it advances gameTime / runs systems, so a game can speed up or slow
+	// down simulation without touching the real frame delta.
+	timeScale = 1;
+	// While paused, update still accrues playerTime but skips advancing gameTime and running systems.
+	paused = false;
 	destroyed = false;
 
 	// The game supplies its own components as `R`; the entity component is added automatically, so it must not
@@ -87,21 +108,48 @@ export default class BaseWorld<
 		entity.on('component-removed', (name: keyof C) => {
 			this.removeEntityFromComponentSystem(entity, name);
 		});
-		// killEntity / killEntityWorker flag the entity dead and emit `death`; remove it here.
-		entity.on('death', () => {
-			this.removeEntity(entity);
-		});
 
 		if(created) {
 			entity.finishLoading();
+			this.emit('entity-added', entity);
+			// killEntity / killEntityWorker flag the entity dead and emit `death`; remove it here.
+			entity.on('death', () => {
+				this.onEntityDied(entity);
+			});
 		}
-		this.emit('entity-added', entity);
 
 		return entity;
 	}
 	loadEntity(config: Cfg, created = true): BaseEntity<C, Cfg> {
 		// The factory expands the config's `type` against the registered templates before building the entity.
 		return this.factory.loadEntity(config, created);
+	}
+	// Replace the world's contents with a saved config.  The existing entities (their backing memory freed) and
+	// every system are cleared first, then each entity is loaded with `created = false` so no finishLoading runs
+	// mid-batch.  Once every entity exists, finishLoading is called on each - so a component that depends on other
+	// entities (e.g. a lumbermill counting nearby trees) can resolve them, since the whole batch is guaranteed
+	// loaded by then.
+	load(config: WorldConfig<Cfg>) {
+		// Iterate over a copy since removeEntity mutates `this.entities`.
+		for(let entity of this.entities.slice()) {
+			this.removeEntity(entity);
+		}
+		this.systems = [];
+
+		const entities = config.entities.map(entityConfig => this.loadEntity(entityConfig, false));
+		for(let entity of entities) {
+			entity.finishLoading();
+			this.emit('entity-added', entity);
+			// killEntity / killEntityWorker flag the entity dead and emit `death`; remove it here.
+			entity.on('death', () => {
+				this.onEntityDied(entity);
+			});
+		}
+
+		// Restore the world clocks, falling back to a fresh world's defaults when the config omits them.
+		this.gameTime = config.gameTime ?? 0;
+		this.playerTime = config.playerTime ?? 0;
+		this.timeScale = config.timeScale ?? 1;
 	}
 	removeEntity(entity: BaseEntity<C, Cfg>) {
 		let index = this.entities.indexOf(entity);
@@ -112,6 +160,9 @@ export default class BaseWorld<
 		}
 
 		entity.deleteAllComponentMemory();
+	}
+	onEntityDied(entity: BaseEntity<C, Cfg>) {
+		this.removeEntity(entity);
 	}
 	getEntityByEid(eid: number): BaseEntity<C, Cfg> | undefined {
 		return this.entitiesByEid[eid];
@@ -135,6 +186,14 @@ export default class BaseWorld<
 	}
 
 	update(elapsedTime: number): { lastSystemError?: Error | null } {
+		// playerTime tracks real elapsed time and keeps ticking even while paused; gameTime is the scaled,
+		// pausable simulation clock the systems run against.
+		this.playerTime += elapsedTime;
+		if(this.paused) {
+			return {};
+		}
+		elapsedTime = this.timeScale * elapsedTime;
+
 		this.gameTime += elapsedTime;
 
 		let lastSystemError: Error | null = null;
@@ -164,6 +223,12 @@ export default class BaseWorld<
 		return {
 			lastSystemError,
 		};
+	}
+	pause() {
+		this.paused = true;
+	}
+	resume() {
+		this.paused = false;
 	}
 
 	addEntityToComponentSystem(entity: BaseEntity<C>, component: keyof C) {

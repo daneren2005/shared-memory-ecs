@@ -20,6 +20,9 @@ interface EntityEventsMessage {
 	type: 'run-complete'
 	runTime: number
 	events: Array<{ entityId: number, event: string, args: Array<any> }>
+	// Flat configs the worker asked to be created; the main thread fulfills each through world.loadEntity on
+	// run-complete.  Kept as plain records so they structured-clone across the worker boundary.
+	created: Array<Record<string, unknown>>
 }
 
 type ComponentWorkerMessage = InitMessage | LoadedMessage | RunUpdateMessage | EntityEventsMessage;
