@@ -14,11 +14,15 @@ const MAIN_QUERY_NAME = '___main';
 //
 // This is deliberately free of any game concepts (no factions, fog of war, position, etc).  Games
 // inject whatever extra per-run data they need through `addDataToWorld`.
-export default abstract class ComponentSystem<C extends ComponentMap = ComponentMap, T extends EntityUpdateComponents<C> = EntityUpdateComponents<C>> extends System<C> {
+export default abstract class ComponentSystem<
+	C extends ComponentMap,
+	T extends EntityUpdateComponents<C>,
+	W extends ComponentSystemWorld = ComponentSystemWorld,
+> extends System<C> {
 	entities: Array<BaseEntity<C>> = [];
-	options: ComponentSystemConfig<C, T>;
+	options: ComponentSystemConfig<C, T, W>;
 
-	worker: Worker | ComponentWebWorker<C, T>;
+	worker: Worker | ComponentWebWorker<C, T, W>;
 	isWorkerThread: boolean;
 
 	private loaded = false;
@@ -28,10 +32,11 @@ export default abstract class ComponentSystem<C extends ComponentMap = Component
 	private queryEntities: { [key: string]: Array<BaseEntity<C>> } = {};
 	private removedEntityBuffer: Array<number> = [];
 
-	// Optional hook for subclasses to attach extra data to the world object sent to the worker.
-	addDataToWorld?(world: ComponentSystemWorld): void;
+	// Optional hook for subclasses to attach extra data to the world object sent to the worker.  Subclasses
+	// declare the concrete shape through `W` and fill in its fields here.
+	addDataToWorld?(world: W): void;
 
-	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: ComponentSystemConfig<C, T>) {
+	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: ComponentSystemConfig<C, T, W>) {
 		super(world, options);
 		this.options = options;
 		Object.keys(this.options.queries ?? {}).forEach(queryName => {
@@ -131,10 +136,12 @@ export default abstract class ComponentSystem<C extends ComponentMap = Component
 		}
 	}
 	run(elapsedTime: number): void {
-		const world: ComponentSystemWorld = {
+		// gameTime + elapsedTime are the only fields the base guarantees; addDataToWorld fills in the rest of `W`,
+		// so the literal is built as the base shape and widened to W for that hook to complete.
+		const world = {
 			gameTime: this.world.gameTime,
 			elapsedTime,
-		};
+		} as W;
 		this.addDataToWorld?.(world);
 
 		this.isRunning = true;
@@ -143,7 +150,7 @@ export default abstract class ComponentSystem<C extends ComponentMap = Component
 		Object.entries(this.options.queries ?? {}).forEach(([queryKey, query]) => {
 			queries[queryKey] = this.runQuery(queryKey, this.queryEntities[queryKey] ?? [], query);
 		});
-		let message: ComponentWorkerMessage = {
+		let message: ComponentWorkerMessage<W> = {
 			type: 'run',
 			world,
 			entities,
@@ -281,24 +288,31 @@ export default abstract class ComponentSystem<C extends ComponentMap = Component
 
 export type EntityUpdateComponents<C extends ComponentMap = ComponentMap> = { [K in keyof C]?: ComponentTypedArray };
 export type EntityQueryComponents<C extends ComponentMap = ComponentMap> = { [key: string]: Array<{ entityId: number, components: EntityUpdateComponents<C> }> };
-type EntityUpdateFunctionImpl<C extends ComponentMap, T extends EntityUpdateComponents<C>> = (
-	world: ComponentSystemWorld,
+type EntityUpdateFunctionImpl<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> = (
+	world: W,
 	entityId: number,
 	components: T,
 	queries: EntityQueryComponents<C>,
 	callbacks: ComponentSystemCallbacks<C>,
 ) => void;
-export type EntityUpdateFunction<C extends ComponentMap, T extends EntityUpdateComponents<C> = EntityUpdateComponents<C>> = EntityUpdateFunctionImpl<C, T> & {
-	preRun?: EntityUpdatePreRunFunction<C, T>
-	entityRemoved?: EntityRemovedFunction<C>
+// `T` is required (no default) so every update function must spell out exactly which components it operates on
+// and their concrete typed arrays, rather than falling back to the full component list.  `W` is the concrete
+// per-run world shape the owning system builds in addDataToWorld; it defaults to the bare ComponentSystemWorld.
+export type EntityUpdateFunction<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> = EntityUpdateFunctionImpl<C, T, W> & {
+	preRun?: EntityUpdatePreRunFunction<C, T, W>
+	entityRemoved?: EntityRemovedFunction<C, W>
 };
-export type EntityUpdatePreRunFunction<C extends ComponentMap, T extends EntityUpdateComponents<C>> = (
-	world: ComponentSystemWorld,
+export type EntityUpdatePreRunFunction<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> = (
+	world: W,
 	entities: Array<UpdateEntityConfigObject<T>>,
 	queries: EntityQueryComponents<C>,
 	callbacks: ComponentSystemCallbacks<C>,
 ) => void;
-export type EntityRemovedFunction<C extends ComponentMap = ComponentMap> = (world: ComponentSystemWorld, entityId: number, callbacks: ComponentSystemCallbacks<C>) => void;
+export type EntityRemovedFunction<C extends ComponentMap = ComponentMap, W extends ComponentSystemWorld = ComponentSystemWorld> = (
+	world: W,
+	entityId: number,
+	callbacks: ComponentSystemCallbacks<C>,
+) => void;
 export type UpdateEntityConfig<T extends EntityUpdateComponents = EntityUpdateComponents> = number | UpdateEntityConfigObject<T>;
 export type UpdateEntityConfigObject<T extends EntityUpdateComponents> = {
 	entityId: number
@@ -306,11 +320,11 @@ export type UpdateEntityConfigObject<T extends EntityUpdateComponents> = {
 };
 
 // Base per-run world data.  gameTime + elapsedTime are always present; games attach anything else
-// they need via addDataToWorld, which is why an index signature is included.
+// they need via addDataToWorld, declaring the concrete shape through the `W` type parameter that
+// ComponentSystem (and its update function) are generic over.
 export interface ComponentSystemWorld {
 	gameTime: number
 	elapsedTime: number
-	[key: string]: unknown
 }
 // A flat entity config a worker asks the main thread to create.  Kept as a plain record (not the game's `Cfg`)
 // because ComponentSystem is generic over `C`, not `Cfg`; the main thread hands it straight to world.loadEntity,
@@ -333,8 +347,12 @@ export interface ComponentSystemQuery<C extends ComponentMap = ComponentMap> {
 	filter?: (entity: BaseEntity<C>) => boolean
 }
 
-export interface ComponentSystemConfig<C extends ComponentMap, T extends EntityUpdateComponents<C>> extends SystemConfig, ComponentSystemQuery<C> {
-	updateFunction: EntityUpdateFunction<C, T>
+export interface ComponentSystemConfig<
+	C extends ComponentMap,
+	T extends EntityUpdateComponents<C>,
+	W extends ComponentSystemWorld = ComponentSystemWorld,
+> extends SystemConfig, ComponentSystemQuery<C> {
+	updateFunction: EntityUpdateFunction<C, T, W>
 	getWorker: () => Worker
 	forceMainThread?: boolean
 

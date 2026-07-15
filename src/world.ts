@@ -124,17 +124,18 @@ export default class BaseWorld<
 		// The factory expands the config's `type` against the registered templates before building the entity.
 		return this.factory.loadEntity(config, created);
 	}
-	// Replace the world's contents with a saved config.  The existing entities (their backing memory freed) and
-	// every system are cleared first, then each entity is loaded with `created = false` so no finishLoading runs
-	// mid-batch.  Once every entity exists, finishLoading is called on each - so a component that depends on other
-	// entities (e.g. a lumbermill counting nearby trees) can resolve them, since the whole batch is guaranteed
-	// loaded by then.
+	// Replace the world's contents with a saved config.  The existing entities (their backing memory freed) are
+	// cleared and each system is reset via `clear()` first, then each entity is loaded with `created = false` so
+	// no finishLoading runs mid-batch.  Systems themselves are set up once ahead of time (they persist across
+	// loads); only their per-load state is cleared here.  Once every entity exists, finishLoading is called on
+	// each - so a component that depends on other entities (e.g. a lumbermill counting nearby trees) can resolve
+	// them, since the whole batch is guaranteed loaded by then.
 	load(config: WorldConfig<Cfg>) {
 		// Iterate over a copy since removeEntity mutates `this.entities`.
 		for(let entity of this.entities.slice()) {
 			this.removeEntity(entity);
 		}
-		this.systems = [];
+		this.systems.forEach(system => system.clear());
 
 		const entities = config.entities.map(entityConfig => this.loadEntity(entityConfig, false));
 		for(let entity of entities) {
@@ -253,7 +254,7 @@ export default class BaseWorld<
 			}
 		});
 	}
-	private componentAffectsComponentSystem(system: ComponentSystem<C>, component: keyof C): boolean {
+	private componentAffectsComponentSystem(system: ComponentSystem<C, any>, component: keyof C): boolean {
 		const affectsMainQuery = system.options.required.includes(component)
 			|| !!system.options.not?.includes(component)
 			|| !!system.options.optional?.includes(component);

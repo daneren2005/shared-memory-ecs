@@ -1,20 +1,20 @@
 import WebWorker from './web-worker';
 import type ComponentWorkerMessage from './component-worker-message';
 import type { ComponentMap } from '../../component-definition';
-import type { ComponentSystemCallbacks, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, UpdateEntityConfigObject } from '../component-system';
+import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, UpdateEntityConfigObject } from '../component-system';
 
 // Main-thread fallback that runs the update function synchronously when real Web Workers /
 // SharedArrayBuffer are unavailable.  Because it runs in-process it can pass the components straight
 // through without caching them by entity id.
-export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>> extends WebWorker {
-	private updateFunction: EntityUpdateFunction<C, T>;
+export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> extends WebWorker {
+	private updateFunction: EntityUpdateFunction<C, T, W>;
 
-	constructor(updateFunction: EntityUpdateFunction<C, T>) {
+	constructor(updateFunction: EntityUpdateFunction<C, T, W>) {
 		super();
 		this.updateFunction = updateFunction;
 	}
 
-	postMessage(message: ComponentWorkerMessage): void {
+	postMessage(message: ComponentWorkerMessage<W>): void {
 		if(message.type === 'init') {
 			this.onMessageTyped({
 				type: 'loaded',
@@ -69,7 +69,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 		}
 	}
 
-	onMessageTyped(message: ComponentWorkerMessage) {
+	onMessageTyped(message: ComponentWorkerMessage<W>) {
 		this.onmessage({
 			data: message,
 		});

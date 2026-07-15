@@ -115,7 +115,21 @@ world.loadEntity(goblin.save());
 worker entry file calls `createComponentWorker(self, updateFunction)`. When Web Workers or
 `SharedArrayBuffer` are unavailable it transparently falls back to running the same update function on
 the main thread. Attach any extra per-run data (the equivalent of the old faction/fog-of-war fields)
-by overriding `addDataToWorld(world)`.
+by overriding `addDataToWorld(world)`. Declare its shape with the `W` type parameter (an interface
+extending `ComponentSystemWorld`) so both `addDataToWorld` and the `updateFunction` see it typed:
+
+```ts
+interface DamageWorld extends ComponentSystemWorld {
+	damage: number
+}
+
+const damageUpdate: EntityUpdateFunction<Components, { health: Int32Array }, DamageWorld> =
+	(world, entityId, components) => { components.health[0] -= world.damage; };
+
+class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld> {
+	addDataToWorld(world: DamageWorld) { world.damage = 5; }
+}
+```
 
 ## Building
 

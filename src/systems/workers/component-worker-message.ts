@@ -8,9 +8,9 @@ interface LoadedMessage {
 	type: 'loaded'
 }
 
-interface RunUpdateMessage {
+interface RunUpdateMessage<W extends ComponentSystemWorld = ComponentSystemWorld> {
 	type: 'run'
-	world: ComponentSystemWorld
+	world: W
 	entities: Array<UpdateEntityConfig>
 	queries: { [key: string]: Array<UpdateEntityConfig> }
 	removed: Array<number>
@@ -25,5 +25,5 @@ interface EntityEventsMessage {
 	created: Array<Record<string, unknown>>
 }
 
-type ComponentWorkerMessage = InitMessage | LoadedMessage | RunUpdateMessage | EntityEventsMessage;
+type ComponentWorkerMessage<W extends ComponentSystemWorld = ComponentSystemWorld> = InitMessage | LoadedMessage | RunUpdateMessage<W> | EntityEventsMessage;
 export default ComponentWorkerMessage;

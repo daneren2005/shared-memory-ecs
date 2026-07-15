@@ -1,7 +1,7 @@
 import { ComponentSystem } from '../../src';
-import type { BaseEntity, ComponentSystemQuery, ComponentSystemWorld } from '../../src';
+import type { BaseEntity, ComponentSystemQuery, System } from '../../src';
 import { createTestWorld, type Components, type TestWorld } from '../fixtures/components';
-import { damageUpdate } from '../fixtures/damage-update';
+import { damageUpdate, type DamageWorld } from '../fixtures/damage-update';
 import { killUpdate } from '../fixtures/kill-update';
 import { spawnUpdate } from '../fixtures/spawn-update';
 import { queryTargetUpdate } from '../fixtures/query-target-update';
@@ -36,7 +36,7 @@ function flush(): Promise<void> {
 
 describe.each(MODES)('component-system (%s)', (mode) => {
 	let world: TestWorld;
-	let systems: Array<ComponentSystem<Components>>;
+	let systems: Array<System<Components>>;
 	beforeEach(() => {
 		world = createTestWorld();
 		systems = [];
@@ -46,8 +46,11 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		systems.forEach(system => system.destroy());
 	});
 
-	// Registers the system with the world and tracks it for teardown.
-	function useSystem<S extends ComponentSystem<Components>>(system: S): S {
+	// Registers the system with the world and tracks it for teardown.  Bounded on the non-generic `System` base
+	// rather than `ComponentSystem<Components>` so it accepts systems that narrow the component arrays type `T`
+	// (e.g. DamageSystem's `{ health: Int32Array }`): `T` is invariant on ComponentSystem, so such systems
+	// aren't assignable to the wide default, but they are all still plain `System<Components>`.
+	function useSystem<S extends System<Components>>(system: S): S {
 		systems.push(system);
 		world.addSystem(system);
 		return system;
@@ -334,7 +337,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 	});
 });
 
-class StubSystem extends ComponentSystem<Components> {
+class StubSystem extends ComponentSystem<Components, {}> {
 	constructor(world: TestWorld, mode: Mode, options: StubOptions) {
 		super(world, {
 			name: 'StubSystem',
@@ -356,7 +359,7 @@ class StubSystem extends ComponentSystem<Components> {
 	}
 }
 
-class DamageSystem extends ComponentSystem<Components> {
+class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld> {
 	damagePerRun?: number;
 
 	constructor(world: TestWorld, mode: Mode) {
@@ -369,14 +372,14 @@ class DamageSystem extends ComponentSystem<Components> {
 		});
 	}
 
-	addDataToWorld(world: ComponentSystemWorld): void {
+	addDataToWorld(world: DamageWorld): void {
 		if(this.damagePerRun !== undefined) {
 			world.damage = this.damagePerRun;
 		}
 	}
 }
 
-class KillSystem extends ComponentSystem<Components> {
+class KillSystem extends ComponentSystem<Components, { health: Int32Array, entity?: Uint32Array }> {
 	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
 			name: 'KillSystem',
@@ -390,7 +393,7 @@ class KillSystem extends ComponentSystem<Components> {
 	}
 }
 
-class SpawnSystem extends ComponentSystem<Components> {
+class SpawnSystem extends ComponentSystem<Components, { health: Int32Array }> {
 	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
 			name: 'SpawnSystem',
@@ -402,7 +405,7 @@ class SpawnSystem extends ComponentSystem<Components> {
 	}
 }
 
-class QueryTargetSystem extends ComponentSystem<Components> {
+class QueryTargetSystem extends ComponentSystem<Components, { movement: Float32Array }> {
 	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
 			// Main query is movement-only, so health entities acted on below are never part of it.

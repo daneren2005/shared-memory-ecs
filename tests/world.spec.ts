@@ -37,7 +37,7 @@ describe('world load', () => {
 		expect(world.systems.length).toEqual(1);
 
 		world.load({ entities: [] });
-		expect(world.systems.length).toEqual(0);
+		expect(world.systems.length).toEqual(1);
 	});
 
 	it('defaults to an empty world when called with no config', () => {
@@ -48,7 +48,7 @@ describe('world load', () => {
 		world.load({ entities: [] });
 
 		expect(world.entities.length).toEqual(0);
-		expect(world.systems.length).toEqual(0);
+		expect(world.systems.length).toEqual(1);
 	});
 
 	it('runs finishLoading only after every entity exists so deferred components see the whole world', () => {

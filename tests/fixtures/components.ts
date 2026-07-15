@@ -124,6 +124,9 @@ export const registry = {
 // fully typed world (and `entity.config`) without hand-writing any composite type.  `ComponentsOf` adds the
 // always-present entity component automatically.
 export type Components = ComponentsOf<typeof registry>;
+export type ComponentArrays = {
+	[K in keyof typeof registry]: InstanceType<(typeof registry)[K]['type']>
+};
 export type Config = EntityConfigOf<typeof registry>;
 export type TestWorld = BaseWorld<typeof registry>;
 
