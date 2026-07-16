@@ -1,4 +1,4 @@
-import type { ComponentSystemWorld, UpdateEntityConfig } from '../component-system';
+import type { ComponentSystemWorld, QueryDelta } from '../component-system';
 
 interface InitMessage {
 	type: 'init'
@@ -11,9 +11,10 @@ interface LoadedMessage {
 interface RunUpdateMessage<W extends ComponentSystemWorld = ComponentSystemWorld> {
 	type: 'run'
 	world: W
-	entities: Array<UpdateEntityConfig>
-	queries: { [key: string]: Array<UpdateEntityConfig> }
-	removed: Array<number>
+	// Membership changes since the last run rather than the full entity set: the worker keeps its own persistent
+	// lists and applies these deltas (see applyQueryDelta), so a steady-state run carries near-empty arrays.
+	entities: QueryDelta
+	queries: { [key: string]: QueryDelta }
 }
 
 interface EntityEventsMessage {

@@ -178,15 +178,64 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		expect(system.getQueryEntityEids('noMovement')).toEqual([staticEntity.eid]);
 	});
 
-	it('removing an entity adds its eid to removedEntityBuffer', () => {
-		let system = useSystem(new StubSystem(world, mode, { required: ['health'] }));
+	// The delta protocol: run() sends only what changed since the last run rather than the full entity set, so
+	// the worker keeps its own persistent lists.  These assert the main-thread bookkeeping that produces those
+	// deltas; applyQueryDelta covers the worker side that consumes them.
+	describe('membership delta', () => {
+		it('queues a newly matched entity as an add until the next run flushes it', () => {
+			let system = useSystem(new StubSystem(world, mode, { required: ['health'] }));
 
-		let entity = createEntity({ maxHealth: 100 });
-		expect(system.getRemovedEntityBuffer()).toEqual([]);
+			let entity = createEntity({ maxHealth: 100 });
+			expect(system.getPendingDelta()).toEqual({ added: [entity.eid], removed: [] });
 
-		world.removeEntity(entity);
+			system.run(0);
 
-		expect(system.getRemovedEntityBuffer()).toContain(entity.eid);
+			// run() flushed the delta to the worker, so nothing is left pending.
+			expect(system.getPendingDelta()).toEqual({ added: [], removed: [] });
+		});
+
+		it('queues a removed entity so the worker drops it from its persistent list', () => {
+			let system = useSystem(new StubSystem(world, mode, { required: ['health'] }));
+
+			let entity = createEntity({ maxHealth: 100 });
+			// Flush the add first so the worker actually knows about the entity.
+			system.run(0);
+
+			world.removeEntity(entity);
+
+			expect(system.getPendingDelta()).toEqual({ added: [], removed: [entity.eid] });
+		});
+
+		it('cancels out an entity added and removed before it is ever sent', () => {
+			let system = useSystem(new StubSystem(world, mode, { required: ['health'] }));
+
+			let entity = createEntity({ maxHealth: 100 });
+			// The worker never learned about it, so removing before a run leaves nothing to transmit.
+			world.removeEntity(entity);
+
+			expect(system.getPendingDelta()).toEqual({ added: [], removed: [] });
+		});
+
+		it('re-queues an entity as an add (not a remove) when its components change after being sent', () => {
+			let system = useSystem(new StubSystem(world, mode, {
+				required: ['health'],
+				queries: {
+					moving: {
+						required: ['movement'],
+					},
+				},
+			}));
+
+			let entity = createEntity({ maxHealth: 100 });
+			system.run(0);
+
+			// A relevant component is added: the entity stays in the main query but joins the sub-query, and its
+			// block set changed - so both queries re-send it rather than leaving the worker with stale blocks.
+			entity.loadComponent('movement', { speed: 100 });
+
+			expect(system.getPendingDelta().added).toEqual([entity.eid]);
+			expect(system.getPendingDelta('moving').added).toEqual([entity.eid]);
+		});
 	});
 
 	// These drive the actual update pipeline - the part that genuinely differs between the two backends
@@ -224,6 +273,38 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			// In worker mode the second run only sends the entity id and relies on the worker's cached
 			// shared-memory block, so a correct result here proves that caching path works.
 			expect(entity.components.health?.health).toEqual(98);
+		});
+
+		// With the delta protocol the worker keeps its own persistent list; removing an entity sends a remove
+		// delta rather than simply omitting it from a full resend, so the surviving entities must keep updating
+		// correctly across the removal.
+		it('keeps updating the remaining entities after one is removed', async () => {
+			let system = useSystem(new DamageSystem(world, mode));
+			await system.init();
+
+			let survivor = createEntity({ maxHealth: 100 });
+			let leaving = createEntity({ maxHealth: 100 });
+
+			system.run(16);
+			await flush();
+			expect(survivor.components.health?.health).toEqual(99);
+			expect(leaving.components.health?.health).toEqual(99);
+
+			// Queues a remove delta for `leaving`; the worker drops it from its persistent list on the next run.
+			world.removeEntity(leaving);
+
+			let survivorEvents = 0;
+			survivor.on('component-property-updated', () => {
+				survivorEvents++;
+			});
+
+			system.run(16);
+			await flush();
+
+			// The survivor was still in the worker's list and got damaged again (exactly once this run).
+			expect(survivor.components.health?.health).toEqual(98);
+			expect(survivorEvents).toEqual(1);
+			expect(system.isEntityInSystem(leaving)).toEqual(false);
 		});
 
 		it('passes per-run data through addDataToWorld', async () => {
@@ -354,8 +435,15 @@ class StubSystem extends ComponentSystem<Components, {}> {
 		return (queryEntities[queryName] ?? []).map(entity => entity.eid);
 	}
 
-	getRemovedEntityBuffer(): Array<number> {
-		return [...(Reflect.get(this, 'removedEntityBuffer') as Array<number>)];
+	// The pending membership delta the next run() will flush to the worker, resolved to eids for assertions.
+	// Defaults to the main query (its internal key is '___main').
+	getPendingDelta(queryName = '___main'): { added: Array<number>, removed: Array<number> } {
+		const deltas = Reflect.get(this, 'queryDeltas') as { [key: string]: { added: Array<BaseEntity<Components>>, removed: Array<number> } };
+		const delta = deltas[queryName] ?? { added: [], removed: [] };
+		return {
+			added: delta.added.map(entity => entity.eid),
+			removed: [...delta.removed],
+		};
 	}
 }
 

@@ -1,13 +1,16 @@
 import WebWorker from './web-worker';
+import { applyQueryDelta } from './apply-query-delta';
 import type ComponentWorkerMessage from './component-worker-message';
 import type { ComponentMap } from '../../component-definition';
-import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, UpdateEntityConfigObject } from '../component-system';
+import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 
 // Main-thread fallback that runs the update function synchronously when real Web Workers /
-// SharedArrayBuffer are unavailable.  Because it runs in-process it can pass the components straight
-// through without caching them by entity id.
+// SharedArrayBuffer are unavailable.  It runs in-process but still keeps persistent per-query lists and applies
+// the same membership deltas the real worker does, so both backends stay behavior-identical.
 export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> extends WebWorker {
 	private updateFunction: EntityUpdateFunction<C, T, W>;
+	private entities: Array<UpdateEntityConfigObject<T>> = [];
+	private queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
 
 	constructor(updateFunction: EntityUpdateFunction<C, T, W>) {
 		super();
@@ -22,6 +25,15 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 		} else if(message.type === 'run') {
 			let entityEvents: Array<{ entityId: number, event: string, args: Array<any> }> = [];
 			let createdEntities: Array<Record<string, unknown>> = [];
+
+			this.entities = applyQueryDelta(this.entities, message.entities as QueryDelta<T>);
+
+			let queries: EntityQueryComponents<C> = {};
+			Object.entries(message.queries).forEach(([queryKey, delta]) => {
+				const list = applyQueryDelta(this.queryEntities[queryKey] ?? [], delta as QueryDelta<T>);
+				this.queryEntities[queryKey] = list;
+				queries[queryKey] = list;
+			});
 
 			let callbacks: ComponentSystemCallbacks<C> = {
 				entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]) {
@@ -43,19 +55,14 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 				},
 			};
 			if(this.updateFunction.preRun) {
-				this.updateFunction.preRun(message.world, message.entities as Array<UpdateEntityConfigObject<T>>, message.queries as EntityQueryComponents<C>, callbacks);
+				this.updateFunction.preRun(message.world, this.entities, queries, callbacks);
 			}
-			message.entities.forEach(entity => {
-				// Should not be called
-				if(typeof entity === 'number') {
-					return;
-				}
-
-				this.updateFunction(message.world, entity.entityId, entity.components as T, message.queries as EntityQueryComponents<C>, callbacks);
+			this.entities.forEach(entity => {
+				this.updateFunction(message.world, entity.entityId, entity.components, queries, callbacks);
 			});
 
 			if(this.updateFunction.entityRemoved) {
-				for(let entityId of message.removed) {
+				for(let entityId of message.entities.removed) {
 					this.updateFunction.entityRemoved(message.world, entityId, callbacks);
 				}
 			}

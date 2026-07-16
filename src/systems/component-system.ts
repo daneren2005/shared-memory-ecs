@@ -28,9 +28,12 @@ export default abstract class ComponentSystem<
 	private loaded = false;
 	private loadingPromise: { promise: Promise<void>, resolve: (value: void | PromiseLike<void>) => void } | null = null;
 	private isRunning = false;
-	private queryEntityComponentCache: { [key: string]: { [key: number]: { entity: BaseEntity<C>, components: T } } } = {};
 	private queryEntities: { [key: string]: Array<BaseEntity<C>> } = {};
-	private removedEntityBuffer: Array<number> = [];
+	// Per-query membership changes accumulated since the last run().  Each run() flushes these to the worker as a
+	// delta - added entities carry their component blocks, removed carry just their eid - so a steady-state run
+	// (unchanged membership) sends empty arrays instead of re-transmitting every entity id every single frame.
+	// The worker keeps its own persistent list and applies these deltas to it (see applyQueryDelta).
+	private queryDeltas: { [key: string]: MembershipDelta<C> } = {};
 
 	// Optional hook for subclasses to attach extra data to the world object sent to the worker.  Subclasses
 	// declare the concrete shape through `W` and fill in its fields here.
@@ -100,6 +103,10 @@ export default abstract class ComponentSystem<
 				message.created.forEach(config => {
 					this.world.loadEntity(config);
 				});
+
+				if(this.isWorkerThread) {
+					this.world.emit(`system-${this.name}-worker-events-finished`, message.runTime);
+				}
 			}
 		};
 
@@ -145,71 +152,50 @@ export default abstract class ComponentSystem<
 		this.addDataToWorld?.(world);
 
 		this.isRunning = true;
-		let entities = this.runQuery(MAIN_QUERY_NAME, this.entities, this.options);
-		let queries: { [key: string]: Array<UpdateEntityConfig<T>> } = {};
+		let entities = this.buildQueryDelta(MAIN_QUERY_NAME, this.options);
+		let queries: { [key: string]: QueryDelta<T> } = {};
 		Object.entries(this.options.queries ?? {}).forEach(([queryKey, query]) => {
-			queries[queryKey] = this.runQuery(queryKey, this.queryEntities[queryKey] ?? [], query);
+			queries[queryKey] = this.buildQueryDelta(queryKey, query);
 		});
 		let message: ComponentWorkerMessage<W> = {
 			type: 'run',
 			world,
 			entities,
 			queries,
-			removed: this.removedEntityBuffer,
 		};
 		this.worker.postMessage(message);
-		this.removedEntityBuffer = [];
 	}
 
-	runQuery(queryName: string, entities: Array<BaseEntity<C>>, query: ComponentSystemQuery<C>): Array<UpdateEntityConfig<T>> {
-		let filteredEntities: Array<UpdateEntityConfig<T>> = [];
+	// Flushes the pending membership changes for a query into the delta the worker applies to its persistent
+	// list.  Added entities are resolved to their shared-memory component blocks here (the only per-frame cost
+	// left, and only for entities that actually joined/changed); removed entities are sent as bare eids.  The
+	// buffers are reset so the next run only carries what changed since this one.
+	private buildQueryDelta(queryName: string, query: ComponentSystemQuery<C>): QueryDelta<T> {
+		const delta = this.getQueryDelta(queryName);
+		const added = delta.added.map(entity => ({
+			entityId: entity.eid,
+			components: this.buildComponents(entity, query),
+		}));
+		const removed = delta.removed;
+		this.queryDeltas[queryName] = { added: [], removed: [] };
 
-		let cache = this.queryEntityComponentCache[queryName];
-		if(!cache) {
-			cache = this.queryEntityComponentCache[queryName] = {};
-		}
-		entities.forEach(entity => {
-			if(entity.components.entity.dead) {
-				return;
-			}
-
-			let components = cache[entity.eid]?.components;
-			// Cache components memory since doing the lookup is kind of slow
-			if(!components) {
-				components = {} as T;
-				[
-					...query.required,
-					...query.optional ?? [],
-				].forEach(componentName => {
-					const component = entity.components[componentName];
-					const memoryComponent = (this.world.registry as RegisteredComponentRegistry<C>)[componentName].memoryComponent;
-					if(component && memoryComponent) {
-						components[componentName] = memoryComponent.getBlock(component.index) as T[typeof componentName];
-					}
-				});
-
-				cache[entity.eid] = {
-					entity,
-					components,
-				};
-
-				filteredEntities.push({
-					entityId: entity.eid,
-					components,
-				});
-			} else if(this.isWorkerThread) {
-				// For worker threads it is slow to send the components in postMessage - so thread caches them after first time sent
-				filteredEntities.push(entity.eid);
-			} else {
-				// For main thread execution it is faster to just pass the components to be used directly
-				filteredEntities.push({
-					entityId: entity.eid,
-					components,
-				});
+		return { added, removed };
+	}
+	private buildComponents(entity: BaseEntity<C>, query: ComponentSystemQuery<C>): T {
+		const components = {} as T;
+		const registry = this.world.registry as RegisteredComponentRegistry<C>;
+		[
+			...query.required,
+			...query.optional ?? [],
+		].forEach(componentName => {
+			const component = entity.components[componentName];
+			const memoryComponent = registry[componentName].memoryComponent;
+			if(component && memoryComponent) {
+				components[componentName] = memoryComponent.getBlock(component.index) as T[typeof componentName];
 			}
 		});
 
-		return filteredEntities;
+		return components;
 	}
 
 	isEntityInSystem(entity: BaseEntity<C>) {
@@ -232,47 +218,70 @@ export default abstract class ComponentSystem<
 
 		return true;
 	}
-	private updateEntityList(list: Array<BaseEntity<C>>, entity: BaseEntity<C>, shouldInclude: boolean) {
-		let index = list.indexOf(entity);
+	private getQueryDelta(queryName: string): MembershipDelta<C> {
+		let delta = this.queryDeltas[queryName];
+		if(!delta) {
+			delta = this.queryDeltas[queryName] = { added: [], removed: [] };
+		}
+
+		return delta;
+	}
+	// Records that an entity now belongs to a query, so the next run() sends its (possibly changed) component
+	// blocks.  An entity queued for removal this same frame is un-queued instead: the worker never learned it
+	// left, so the net effect is a re-send of fresh components rather than a remove+add churn.
+	private markAdded(delta: MembershipDelta<C>, entity: BaseEntity<C>) {
+		const removedIndex = delta.removed.indexOf(entity.eid);
+		if(removedIndex !== -1) {
+			delta.removed.splice(removedIndex, 1);
+		}
+		if(delta.added.indexOf(entity) === -1) {
+			delta.added.push(entity);
+		}
+	}
+	// Records that an entity left a query.  If it was only queued to be added this same frame (never sent to the
+	// worker), we just drop the pending add - the worker never knew about it, so there is nothing to remove.
+	private markRemoved(delta: MembershipDelta<C>, entity: BaseEntity<C>) {
+		const addedIndex = delta.added.indexOf(entity);
+		if(addedIndex !== -1) {
+			delta.added.splice(addedIndex, 1);
+			return;
+		}
+		if(delta.removed.indexOf(entity.eid) === -1) {
+			delta.removed.push(entity.eid);
+		}
+	}
+	private updateEntityList(queryName: string, list: Array<BaseEntity<C>>, entity: BaseEntity<C>, shouldInclude: boolean) {
+		const index = list.indexOf(entity);
+		const delta = this.getQueryDelta(queryName);
 		if(shouldInclude) {
 			if(index === -1) {
 				list.push(entity);
 			}
+			// Always (re)queue the component blocks: the entity either just joined or a relevant component was
+			// added/removed, so the blocks the worker holds for it may be stale.
+			this.markAdded(delta, entity);
 		} else if(index !== -1) {
 			list.splice(index, 1);
+			this.markRemoved(delta, entity);
 		}
 	}
 
 	checkAddEntity(entity: BaseEntity<C>): boolean {
 		const shouldAddToMain = this.matchesQuery(entity, this.options);
-		this.updateEntityList(this.entities, entity, shouldAddToMain);
+		this.updateEntityList(MAIN_QUERY_NAME, this.entities, entity, shouldAddToMain);
 
 		Object.entries(this.options.queries ?? {}).forEach(([queryName, query]) => {
 			const queryList = this.queryEntities[queryName] ?? (this.queryEntities[queryName] = []);
-			this.updateEntityList(queryList, entity, this.matchesQuery(entity, query));
-		});
-
-		// Invalidate cached components so they are rebuilt with current components on next runQuery
-		Object.values(this.queryEntityComponentCache).forEach(cache => {
-			if(cache[entity.eid]) {
-				delete cache[entity.eid];
-			}
+			this.updateEntityList(queryName, queryList, entity, this.matchesQuery(entity, query));
 		});
 
 		return shouldAddToMain;
 	}
 	removeEntity(entity: BaseEntity<C>) {
-		this.updateEntityList(this.entities, entity, false);
-		Object.values(this.queryEntities).forEach(list => {
-			this.updateEntityList(list, entity, false);
+		this.updateEntityList(MAIN_QUERY_NAME, this.entities, entity, false);
+		Object.entries(this.queryEntities).forEach(([queryName, list]) => {
+			this.updateEntityList(queryName, list, entity, false);
 		});
-
-		Object.values(this.queryEntityComponentCache).forEach(cache => {
-			if(cache[entity.eid]) {
-				delete cache[entity.eid];
-			}
-		});
-		this.removedEntityBuffer.push(entity.eid);
 	}
 
 	shouldRun(): boolean {
@@ -318,6 +327,20 @@ export type UpdateEntityConfigObject<T extends EntityUpdateComponents> = {
 	entityId: number
 	components: T
 };
+
+// The membership changes for a single query since the last run, in the shape sent to the worker: entities that
+// joined (or whose component set changed) with their resolved component blocks, and the eids of entities that
+// left.  Empty on a steady-state run, which is what keeps the per-frame postMessage small.
+export interface QueryDelta<T extends EntityUpdateComponents = EntityUpdateComponents> {
+	added: Array<UpdateEntityConfigObject<T>>
+	removed: Array<number>
+}
+// The main thread's pre-serialization form of a QueryDelta: it holds the live entities (so their component
+// blocks can be resolved lazily at run time), whereas QueryDelta holds the resolved blocks that cross the wire.
+interface MembershipDelta<C extends ComponentMap> {
+	added: Array<BaseEntity<C>>
+	removed: Array<number>
+}
 
 // Base per-run world data.  gameTime + elapsedTime are always present; games attach anything else
 // they need via addDataToWorld, declaring the concrete shape through the `W` type parameter that
