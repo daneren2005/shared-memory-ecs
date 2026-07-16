@@ -1,5 +1,5 @@
-import type { BaseWorld } from '../../src';
-import type { ComponentDefinitionMap, ComponentMap } from '../../src';
+import type { BaseWorld } from '../../index';
+import type { ComponentDefinitionMap, ComponentMap } from '../../index';
 
 // STEP_SIZE mirrors the game's fixed timestep so the timing based system tests behave identically.
 export const STEP_SIZE = 16.66;

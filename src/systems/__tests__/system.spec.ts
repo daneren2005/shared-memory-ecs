@@ -1,6 +1,6 @@
-import { System } from '../../src';
-import { createTestWorld, type Components, type TestWorld } from '../fixtures/components';
-import { runWorld } from '../fixtures/run-world';
+import { System } from '../../index';
+import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
+import { runWorld } from '../../__tests__/fixtures/run-world';
 
 describe('system', () => {
 	it('run with no deltaBetweenRuns', () => {

@@ -1,5 +1,5 @@
 import { MemoryHeap } from '@daneren2005/shared-memory-objects';
-import { MemoryComponent } from '../src';
+import { MemoryComponent } from '../index';
 
 describe('memory component', () => {
 	it('basic', () => {

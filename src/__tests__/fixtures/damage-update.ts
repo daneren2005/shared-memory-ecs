@@ -1,4 +1,4 @@
-import type { ComponentSystemWorld, EntityUpdateFunction } from '../../src';
+import type { ComponentSystemWorld, EntityUpdateFunction } from '../../index';
 import type { ComponentArrays, Components } from './components';
 
 // Per-run world shape this system attaches through addDataToWorld: an optional per-run damage override.

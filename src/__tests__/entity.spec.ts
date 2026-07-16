@@ -1,4 +1,4 @@
-import { BaseEntity, EntityFactory, killEntity } from '../src';
+import { BaseEntity, EntityFactory, killEntity } from '../index';
 import { createTestWorld, type Components, type Config } from './fixtures/components';
 
 describe('entity', () => {

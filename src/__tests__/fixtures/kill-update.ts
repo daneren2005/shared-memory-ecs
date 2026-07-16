@@ -1,5 +1,5 @@
-import { killEntityWorker } from '../../src';
-import type { EntityUpdateFunction } from '../../src';
+import { killEntityWorker } from '../../index';
+import type { EntityUpdateFunction } from '../../index';
 import type { ComponentArrays, Components } from './components';
 
 // Kills every entity it runs over via killEntityWorker so the death path can be exercised end to end from

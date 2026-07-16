@@ -1,20 +1,20 @@
-import { ComponentSystem } from '../../src';
-import type { BaseEntity, ComponentSystemQuery, System } from '../../src';
-import { createTestWorld, type Components, type TestWorld } from '../fixtures/components';
-import { damageUpdate, type DamageWorld } from '../fixtures/damage-update';
-import { killUpdate } from '../fixtures/kill-update';
-import { spawnUpdate } from '../fixtures/spawn-update';
-import { queryTargetUpdate } from '../fixtures/query-target-update';
+import { ComponentSystem } from '../../index';
+import type { BaseEntity, ComponentSystemQuery, System } from '../../index';
+import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
+import { damageUpdate, type DamageWorld } from '../../__tests__/fixtures/damage-update';
+import { killUpdate } from '../../__tests__/fixtures/kill-update';
+import { spawnUpdate } from '../../__tests__/fixtures/spawn-update';
+import { queryTargetUpdate } from '../../__tests__/fixtures/query-target-update';
 
 // Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.  The noop worker backs
 // the membership tests (which never call run()); the damage worker backs the run() flow tests; the kill
 // worker backs the death tests; the spawn worker backs the creation tests; the query-target worker backs
 // the sub-query event-routing tests.
-const NOOP_WORKER_URL = new URL('../fixtures/noop.worker.ts', import.meta.url);
-const DAMAGE_WORKER_URL = new URL('../fixtures/damage.worker.ts', import.meta.url);
-const KILL_WORKER_URL = new URL('../fixtures/kill.worker.ts', import.meta.url);
-const SPAWN_WORKER_URL = new URL('../fixtures/spawn.worker.ts', import.meta.url);
-const QUERY_TARGET_WORKER_URL = new URL('../fixtures/query-target.worker.ts', import.meta.url);
+const NOOP_WORKER_URL = new URL('../../__tests__/fixtures/noop.worker.ts', import.meta.url);
+const DAMAGE_WORKER_URL = new URL('../../__tests__/fixtures/damage.worker.ts', import.meta.url);
+const KILL_WORKER_URL = new URL('../../__tests__/fixtures/kill.worker.ts', import.meta.url);
+const SPAWN_WORKER_URL = new URL('../../__tests__/fixtures/spawn.worker.ts', import.meta.url);
+const QUERY_TARGET_WORKER_URL = new URL('../../__tests__/fixtures/query-target.worker.ts', import.meta.url);
 
 // Every test runs against both backends: 'main-thread' uses the in-process ComponentWebWorker
 // (forceMainThread), 'worker' uses a real worker module driven through createComponentWorker.  Both must

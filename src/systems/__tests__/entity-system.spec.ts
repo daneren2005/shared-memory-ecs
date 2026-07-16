@@ -1,6 +1,6 @@
-import { EntitySystem } from '../../src';
-import type { BaseEntity } from '../../src';
-import { createTestWorld, type Components, type TestWorld } from '../fixtures/components';
+import { EntitySystem } from '../../index';
+import type { BaseEntity } from '../../index';
+import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
 
 describe('entity-system', () => {
 	let world: TestWorld;

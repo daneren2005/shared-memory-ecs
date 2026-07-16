@@ -1,5 +1,5 @@
-import { BaseWorld } from '../../src';
-import type { ComponentDefinition, ComponentsOf, EntityConfigOf, EntityFactory } from '../../src';
+import { BaseWorld } from '../../index';
+import type { ComponentDefinition, ComponentsOf, EntityConfigOf, EntityFactory } from '../../index';
 
 // A tiny set of memory-backed components used by the tests, mirroring the shape a real game supplies.
 

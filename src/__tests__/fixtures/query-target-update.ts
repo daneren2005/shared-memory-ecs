@@ -1,5 +1,5 @@
-import { killEntityWorker } from '../../src';
-import type { EntityUpdateFunction } from '../../src';
+import { killEntityWorker } from '../../index';
+import type { EntityUpdateFunction } from '../../index';
 import type { ComponentArrays, Components } from './components';
 
 // Reports events (a component change then a death) for every entity in the `targets` sub-query rather than for

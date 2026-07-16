@@ -1,4 +1,4 @@
-import { createComponentWorker } from '../../src';
+import { createComponentWorker } from '../../index';
 import { damageUpdate } from './damage-update';
 
 // Real worker entry point.  Pass `self` explicitly so this works under @vitest/web-worker, which injects

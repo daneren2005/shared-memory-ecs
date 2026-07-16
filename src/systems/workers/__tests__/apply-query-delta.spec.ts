@@ -1,5 +1,5 @@
-import { applyQueryDelta } from '../../../src/systems/workers/apply-query-delta';
-import type { UpdateEntityConfigObject } from '../../../src/systems/component-system';
+import { applyQueryDelta } from '../apply-query-delta';
+import type { UpdateEntityConfigObject } from '../../component-system';
 
 // The worker-side half of the delta protocol: given a persistent list and the changes a run carries, produce the
 // updated list.  Kept a pure function so both worker backends share it and it can be unit-tested directly.

@@ -1,5 +1,5 @@
-import { createEntityWorker } from '../../src';
-import type { EntityUpdateFunction } from '../../src';
+import { createEntityWorker } from '../../index';
+import type { EntityUpdateFunction } from '../../index';
 import type { ComponentArrays, Components } from './components';
 
 // Asks the main thread to create one new entity for each entity it runs over, exercising the deferred creation

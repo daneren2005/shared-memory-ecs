@@ -1,4 +1,4 @@
-import { System, killEntity } from '../src';
+import { System, killEntity } from '../index';
 import { createTestWorld, type Components, type TestWorld } from './fixtures/components';
 
 describe('world load', () => {
