@@ -35,7 +35,7 @@
 		"prepare": "husky"
 	},
 	"dependencies": {
-		"@daneren2005/shared-memory-objects": "^0.0.21",
+		"@daneren2005/shared-memory-objects": "^1.0.0",
 		"eventemitter3": "^3.1.2"
 	},
 	"devDependencies": {
