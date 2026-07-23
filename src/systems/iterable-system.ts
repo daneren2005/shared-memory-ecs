@@ -1,5 +1,5 @@
 import type BaseWorld from '../world';
-import type { ComponentMap } from '../component-definition';
+import type { ComponentDefinitionMap, ComponentMap } from '../component-definition';
 import System, { type SystemConfig } from './system';
 
 // A system that iterates a list of instances, spreading the work across multiple frames if a single
@@ -10,7 +10,7 @@ export default abstract class IterableSystem<C extends ComponentMap, T> extends 
 	iterationsPerCheck: number;
 	maxMsPerFrame: number;
 
-	constructor(world: BaseWorld<C>, options: IterableSystemConfig) {
+	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: IterableSystemConfig) {
 		super(world, options);
 
 		this.iterationsPerCheck = options.iterationsPerCheck ?? 1;

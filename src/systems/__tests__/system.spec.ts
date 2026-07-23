@@ -1,7 +1,6 @@
-import { System } from '../../src';
-import type { BaseWorld } from '../../src';
-import { createTestWorld, type Components } from '../fixtures/components';
-import { runWorld } from '../fixtures/run-world';
+import { System } from '../../index';
+import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
+import { runWorld } from '../../__tests__/fixtures/run-world';
 
 describe('system', () => {
 	it('run with no deltaBetweenRuns', () => {
@@ -73,7 +72,7 @@ describe('system', () => {
 class BasicSystem extends System<Components> {
 	public age: number = 0;
 
-	constructor(world: BaseWorld<Components>, options: Partial<{ deltaBetweenRuns: number, firstRun: boolean }> = {}) {
+	constructor(world: TestWorld, options: Partial<{ deltaBetweenRuns: number, firstRun: boolean }> = {}) {
 		super(world, {
 			name: 'BasicSystem',
 			...options,
