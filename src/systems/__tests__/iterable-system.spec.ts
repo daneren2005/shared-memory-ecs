@@ -1,6 +1,6 @@
-import { IterableSystem } from '../../src';
-import { createTestWorld, type Components } from '../fixtures/components';
-import { runWorld } from '../fixtures/run-world';
+import { IterableSystem } from '../../index';
+import { createTestWorld, type Components } from '../../__tests__/fixtures/components';
+import { runWorld } from '../../__tests__/fixtures/run-world';
 
 describe('iterable-system', () => {
 	beforeEach(() => {

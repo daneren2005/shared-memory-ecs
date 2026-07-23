@@ -1,13 +1,28 @@
 export { default as BaseWorld } from './world';
-export type { WorldOptions } from './world';
+export type { WorldOptions, WorldConfig } from './world';
 export { default as BaseEntity } from './entity';
+export { default as EntityFactory } from './entity-factory';
+export { entityDefinition, DEAD_INDEX, STATIC_INDEX } from './entity-component';
+export type {
+	EntityComponent,
+	EntityComponentConfig,
+	EntityComponentSerialization,
+} from './entity-component';
+export { default as killEntity } from './actions/kill-entity';
+export { default as killEntityWorker } from './actions/kill-entity-worker';
+export { default as createEntityWorker } from './actions/create-entity-worker';
 export { default as MemoryComponent } from './memory-component';
 export type { ComponentTypedArray } from './memory-component';
 export type {
 	BaseComponent,
 	ComponentMap,
 	ComponentDefinition,
+	ComponentDefinitionMap,
 	ComponentRegistry,
+	ComponentsOf,
+	EntityConfigOf,
+	RegisteredComponentDefinition,
+	RegisteredComponentRegistry,
 } from './component-definition';
 
 export { default as System } from './systems/system';
@@ -22,6 +37,7 @@ export type {
 	ComponentSystemQuery,
 	ComponentSystemWorld,
 	ComponentSystemCallbacks,
+	CreateEntityConfig,
 	EntityUpdateComponents,
 	EntityQueryComponents,
 	EntityUpdateFunction,
