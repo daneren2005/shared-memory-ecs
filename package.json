@@ -35,7 +35,6 @@
 		"prepare": "husky"
 	},
 	"dependencies": {
-		"@daneren2005/shared-memory-objects": "^1.0.0",
 		"eventemitter3": "^5.0.4"
 	},
 	"devDependencies": {
@@ -52,5 +51,8 @@
 		"typescript": "^7.0.2",
 		"vite": "^8.1.4",
 		"vitest": "^4.1.10"
-	}
+	},
+  "peerDependencies": {
+    "@daneren2005/shared-memory-objects": "^1.0.0"
+  }
 }
