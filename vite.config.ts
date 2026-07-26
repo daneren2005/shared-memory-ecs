@@ -13,7 +13,6 @@ export default defineConfig({
 		// Keep runtime dependencies external so they are not inlined into the bundle.
 		rollupOptions: {
 			external: [
-				'eventemitter3',
 				/^@daneren2005\/shared-memory-objects(\/.*)?$/,
 			],
 		},
