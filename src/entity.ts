@@ -1,4 +1,4 @@
-import { EventEmitter } from 'eventemitter3';
+import EventEmitter from 'eventemitter3';
 import type BaseWorld from './world';
 import type { ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from './component-definition';
 import type { EntityComponent } from './entity-component';
