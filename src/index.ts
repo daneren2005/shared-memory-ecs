@@ -11,6 +11,13 @@ export type {
 export { default as killEntity } from './actions/kill-entity';
 export { default as killEntityWorker } from './actions/kill-entity-worker';
 export { default as createEntityWorker } from './actions/create-entity-worker';
+export { default as PerformanceTiming, DEFAULT_TICKS_BETWEEN_UPDATES } from './performance-timing';
+export type {
+	TimingStats,
+	SystemTimingStats,
+	PerformanceStats,
+	PerformanceTimingOptions,
+} from './performance-timing';
 export { default as MemoryComponent } from './memory-component';
 export type { ComponentTypedArray } from './memory-component';
 export type {
@@ -51,3 +58,4 @@ export { default as WebWorker } from './systems/workers/web-worker';
 export { default as ComponentWebWorker } from './systems/workers/component-web-worker';
 export { default as createComponentWorker } from './systems/workers/create-component-worker';
 export type { default as ComponentWorkerMessage } from './systems/workers/component-worker-message';
+export type { EntityEvent } from './systems/workers/component-worker-message';

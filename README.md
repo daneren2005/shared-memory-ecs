@@ -131,6 +131,63 @@ class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, D
 }
 ```
 
+### Reporting back to the main thread
+
+An update function runs on shared memory, so anything it writes is already visible on the main thread. What
+it cannot do from there is touch the world, so the things that have to happen back on it go through
+`callbacks`: `entityComponentChanged` (emitted on the entity as `component-property-updated`), `entityDied`
+(as `death`), and `createEntity`. All of them are collected during the run and applied once it completes.
+
+`emitEntityEvent` is the escape hatch for an event of your own: name it whatever you like and give it
+whatever args suit it, and it is emitted on the entity under that name. It exists so a system does not have
+to spend one `component-property-updated` per property when the listener only cares about all of them
+together - a move that reports `x` and `y` as one `position-updated` is half the events of one per axis:
+
+```ts
+// in the update function
+callbacks.emitEntityEvent(entityId, 'position-updated', x, y);
+
+// on the main thread
+entity.on('position-updated', (x: number, y: number) => { ... });
+```
+
+The args are structured-cloned across the worker boundary, so they have to be plain values - no functions,
+no class instances. Nothing about the name or the args is checked against your component map, since the
+event is the system's own concept rather than a component, so export both alongside the update function that
+emits them.
+
+## Measuring performance
+
+`PerformanceTiming` watches a world and reports what running it costs. Hand it the world and it hooks itself
+up to the events the world already emits - there is nothing to call per frame and nothing added to the hot
+path:
+
+```ts
+const timing = new PerformanceTiming(world);
+timing.on('stats-updated', (stats: PerformanceStats) => renderDebugPanel(stats));
+```
+
+It gathers samples every frame and collapses them into a fresh `timing.stats` snapshot once
+`ticksBetweenUpdates` (default `1_000`) worth of elapsed time has gone by, then emits `stats-updated` with it.
+The window is measured in whatever unit you drive `world.update` with, so a game running on milliseconds gets
+a snapshot a second. Frames the world was paused for are skipped, since it does no work on them.
+
+Every entry is an `{ avg, min, max, samples }` over the window just closed:
+
+- `stats.update` - one whole `world.update` call on the thread the world lives on.
+- `stats.systems[]` - per system, in run order: `run` is the run itself on its worker, as the worker measured
+  it, and `events` is what handling that run's results (the events it reported onto entities, the entities it
+  asked to be created) cost back on the calling thread. A system running on the main-thread fallback never
+  reports either, so it sits at zero with `samples: 0` - which is what tells it apart from one that genuinely
+  cost nothing.
+- `stats.events` - every system's event handling added together. Workers finish on their own schedule rather
+  than on a frame boundary, so there is no per-frame combined sample to take; these are the per-system figures
+  summed at the end of the window, giving what a run of every system costs the main thread between them.
+
+`getSystemStats(name)` pulls one system out of the latest snapshot, `reset()` throws away everything collected
+so far (worth doing after loading a new scene, when the samples either side are not comparable), and
+`destroy()` unhooks it from the world.
+
 ## Building
 
 ```sh

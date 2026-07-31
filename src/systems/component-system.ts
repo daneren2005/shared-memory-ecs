@@ -356,6 +356,15 @@ export type CreateEntityConfig = Record<string, unknown>;
 
 export interface ComponentSystemCallbacks<C extends ComponentMap = ComponentMap> {
 	entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]): void
+	// Reports an event of the update function's own choosing, emitted on the entity by that name once the run
+	// completes.  It is the escape hatch from the fixed callbacks above: a system that would otherwise send a
+	// `component-property-updated` per property can send one event carrying all of them instead, and a listener
+	// that only cares about that one thing does not have to filter every other property change out of its way.
+	//
+	// The args are structured-cloned across the worker boundary, so they have to be plain values.  Nothing
+	// here is checked against `C` - the event is the system's own concept, not a component - so a system that
+	// emits one should export the name and the args it comes with alongside its update function.
+	emitEntityEvent(entityId: number, event: string, ...args: Array<unknown>): void
 	entityDied(entityId: number): void
 	// Requests that the main thread create an entity from `config` once the run completes.  Unlike killing (which
 	// flips an existing shared-memory flag in place), creation can't happen in the worker, so it is deferred to the
