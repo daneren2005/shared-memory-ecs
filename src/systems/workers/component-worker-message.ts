@@ -17,10 +17,19 @@ interface RunUpdateMessage<W extends ComponentSystemWorld = ComponentSystemWorld
 	queries: { [key: string]: QueryDelta }
 }
 
+// One event a worker asks the main thread to emit on an entity once the run completes.  The whole thing
+// crosses the worker boundary by structured clone, so everything in `args` has to be cloneable - a plain
+// number, string, or object, never a function or a class instance.
+export interface EntityEvent {
+	entityId: number
+	event: string
+	args: Array<unknown>
+}
+
 interface EntityEventsMessage {
 	type: 'run-complete'
 	runTime: number
-	events: Array<{ entityId: number, event: string, args: Array<any> }>
+	events: Array<EntityEvent>
 	// Flat configs the worker asked to be created; the main thread fulfills each through world.loadEntity on
 	// run-complete.  Kept as plain records so they structured-clone across the worker boundary.
 	created: Array<Record<string, unknown>>
