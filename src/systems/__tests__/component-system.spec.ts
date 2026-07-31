@@ -259,6 +259,24 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(events).toEqual([99]);
 		});
 
+		// An update function can name an event of its own and hand it whatever args it needs, so a system that
+		// would otherwise report several properties one at a time can report them together in one event.
+		it('emits an update function\'s own event on the entity with its args', async () => {
+			let system = useSystem(new DamageSystem(world, mode));
+			await system.init();
+
+			let entity = createEntity({ maxHealth: 100 });
+			let damaged: Array<Array<number>> = [];
+			entity.on('damaged', (damage: number, health: number) => {
+				damaged.push([damage, health]);
+			});
+
+			system.run(16);
+			await flush();
+
+			expect(damaged).toEqual([[1, 99]]);
+		});
+
 		it('caches components across repeated runs', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
 			await system.init();

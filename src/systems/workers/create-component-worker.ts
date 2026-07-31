@@ -1,4 +1,5 @@
 import type ComponentWorkerMessage from './component-worker-message';
+import type { EntityEvent } from './component-worker-message';
 import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 import { applyQueryDelta } from './apply-query-delta';
@@ -32,7 +33,7 @@ export default function createComponentWorker<
 			});
 		} else if(message.type === 'run') {
 			const start = performance.now();
-			let entityEvents: Array<{ entityId: number, event: string, args: Array<any> }> = [];
+			let entityEvents: Array<EntityEvent> = [];
 			let createdEntities: Array<Record<string, unknown>> = [];
 
 			entities = applyQueryDelta(entities, message.entities as QueryDelta<T>);
@@ -50,6 +51,13 @@ export default function createComponentWorker<
 						entityId,
 						event: 'component-property-updated',
 						args: [componentName, prop, value],
+					});
+				},
+				emitEntityEvent(entityId: number, event: string, ...args: Array<unknown>) {
+					entityEvents.push({
+						entityId,
+						event,
+						args,
 					});
 				},
 				entityDied(entityId: number) {

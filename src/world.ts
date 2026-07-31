@@ -171,22 +171,36 @@ export default class BaseWorld<
 
 	addSystem<T extends System<C>>(system: T): T {
 		this.systems.push(system);
+		this.emit('system-added', system);
 		return system;
 	}
 	addSystemIfNotExists(system: System<C>) {
 		let index = this.systems.findIndex(otherSystem => system.name === otherSystem.name);
 		if(index === -1) {
 			this.systems.push(system);
+			this.emit('system-added', system);
 		}
 	}
 	removeSystem(name: string) {
 		let index = this.systems.findIndex(system => system.name === name);
 		if(index !== -1) {
-			this.systems.splice(index, 1);
+			const [system] = this.systems.splice(index, 1);
+			this.emit('system-removed', system);
 		}
 	}
 
+	// Brackets the whole frame with `update-started` / `update-finished` (both carrying the elapsed time as it was
+	// passed in, before timeScale) so an observer - PerformanceTiming, chiefly - can time an update without the
+	// world itself having to read a clock every frame.  Both fire even while paused, where the update does
+	// nothing but accrue playerTime.
 	update(elapsedTime: number): { lastSystemError?: Error | null } {
+		this.emit('update-started', elapsedTime);
+		const result = this.runUpdate(elapsedTime);
+		this.emit('update-finished', elapsedTime);
+
+		return result;
+	}
+	private runUpdate(elapsedTime: number): { lastSystemError?: Error | null } {
 		// playerTime tracks real elapsed time and keeps ticking even while paused; gameTime is the scaled,
 		// pausable simulation clock the systems run against.
 		this.playerTime += elapsedTime;

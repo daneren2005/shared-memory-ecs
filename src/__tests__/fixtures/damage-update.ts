@@ -21,4 +21,8 @@ export const damageUpdate: EntityUpdateFunction<Components, Pick<ComponentArrays
 	const damage = world.damage ?? 1;
 	health[0] -= damage;
 	callbacks.entityComponentChanged(entityId, 'health', 'health', health[0]);
+	// A system's own event alongside the component change, carrying both what was taken off and what is left -
+	// the thing a plain per-property change cannot say in one go.  Named by this update rather than by the ECS,
+	// which is what emitEntityEvent is for.
+	callbacks.emitEntityEvent(entityId, 'damaged', damage, health[0]);
 };
