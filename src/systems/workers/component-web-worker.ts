@@ -1,6 +1,7 @@
 import WebWorker from './web-worker';
 import { applyQueryDelta } from './apply-query-delta';
 import type ComponentWorkerMessage from './component-worker-message';
+import type { EntityEvent } from './component-worker-message';
 import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 
@@ -23,7 +24,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 				type: 'loaded',
 			});
 		} else if(message.type === 'run') {
-			let entityEvents: Array<{ entityId: number, event: string, args: Array<any> }> = [];
+			let entityEvents: Array<EntityEvent> = [];
 			let createdEntities: Array<Record<string, unknown>> = [];
 
 			this.entities = applyQueryDelta(this.entities, message.entities as QueryDelta<T>);
@@ -41,6 +42,13 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 						entityId,
 						event: 'component-property-updated',
 						args: [componentName, prop, value],
+					});
+				},
+				emitEntityEvent(entityId: number, event: string, ...args: Array<unknown>) {
+					entityEvents.push({
+						entityId,
+						event,
+						args,
 					});
 				},
 				entityDied(entityId: number) {
