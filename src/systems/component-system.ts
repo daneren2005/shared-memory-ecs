@@ -19,7 +19,10 @@ export default abstract class ComponentSystem<
 	T extends EntityUpdateComponents<C>,
 	W extends ComponentSystemWorld = ComponentSystemWorld,
 > extends System<C> {
-	entities: Array<BaseEntity<C>> = [];
+	// Keyed by eid for the same reason the world's is (see BaseWorld#entities): every entity that leaves the
+	// world is dropped from here too, so an array would mean a scan of this system's whole membership per
+	// death, per system, on top of the world's own.
+	entities: Map<number, BaseEntity<C>> = new Map();
 	options: ComponentSystemConfig<C, T, W>;
 
 	worker: Worker | ComponentWebWorker<C, T, W>;
@@ -28,7 +31,7 @@ export default abstract class ComponentSystem<
 	private loaded = false;
 	private loadingPromise: { promise: Promise<void>, resolve: (value: void | PromiseLike<void>) => void } | null = null;
 	private isRunning = false;
-	private queryEntities: { [key: string]: Array<BaseEntity<C>> } = {};
+	private queryEntities: { [key: string]: Map<number, BaseEntity<C>> } = {};
 	// Per-query membership changes accumulated since the last run().  Each run() flushes these to the worker as a
 	// delta - added entities carry their component blocks, removed carry just their eid - so a steady-state run
 	// (unchanged membership) sends empty arrays instead of re-transmitting every entity id every single frame.
@@ -43,7 +46,7 @@ export default abstract class ComponentSystem<
 		super(world, options);
 		this.options = options;
 		Object.keys(this.options.queries ?? {}).forEach(queryName => {
-			this.queryEntities[queryName] = [];
+			this.queryEntities[queryName] = new Map();
 		});
 
 		world.on('entity-added', (entity: BaseEntity<C>) => {
@@ -79,8 +82,15 @@ export default abstract class ComponentSystem<
 				}
 			} else if(message.type === 'run-complete') {
 				this.isRunning = false;
-				if(this.isWorkerThread) {
-					this.world.emit(`system-${this.name}-worker-finished`, message.runTime);
+				// Emitted for the main-thread fallback too: the run and the dispatch below still cost what they
+				// cost, they just cost it on this thread, so a forceMainThread system that reported nothing would
+				// read as free in PerformanceTiming rather than as expensive-but-inline.
+				this.world.emit(`system-${this.name}-worker-finished`, message.runTime);
+
+				// Before the per-entity events below, so an entity that died this run is still in the world when the
+				// run that moved it is reported: `death` is dispatched down there and takes the entity out with it.
+				for(const event of Object.keys(message.systemEvents)) {
+					this.emit(event, message.systemEvents[event]);
 				}
 
 				message.events.forEach(event => {
@@ -104,9 +114,7 @@ export default abstract class ComponentSystem<
 					this.world.loadEntity(config);
 				});
 
-				if(this.isWorkerThread) {
-					this.world.emit(`system-${this.name}-worker-events-finished`, message.runTime);
-				}
+				this.world.emit(`system-${this.name}-worker-events-finished`, message.runTime);
 			}
 		};
 
@@ -172,12 +180,18 @@ export default abstract class ComponentSystem<
 	// buffers are reset so the next run only carries what changed since this one.
 	private buildQueryDelta(queryName: string, query: ComponentSystemQuery<C>): QueryDelta<T> {
 		const delta = this.getQueryDelta(queryName);
-		const added = delta.added.map(entity => ({
-			entityId: entity.eid,
-			components: this.buildComponents(entity, query),
-		}));
-		const removed = delta.removed;
-		this.queryDeltas[queryName] = { added: [], removed: [] };
+		// Flattened to arrays here because this is the point the delta stops being something to accumulate into
+		// and becomes something to send: the sets are what make queuing a change cheap, and arrays are what
+		// structured-clone across the worker boundary.
+		const added: Array<UpdateEntityConfigObject<T>> = [];
+		delta.added.forEach(entity => {
+			added.push({
+				entityId: entity.eid,
+				components: this.buildComponents(entity, query),
+			});
+		});
+		const removed = Array.from(delta.removed);
+		this.queryDeltas[queryName] = { added: new Set(), removed: new Set() };
 
 		return { added, removed };
 	}
@@ -199,7 +213,7 @@ export default abstract class ComponentSystem<
 	}
 
 	isEntityInSystem(entity: BaseEntity<C>) {
-		return this.entities.indexOf(entity) !== -1;
+		return this.entities.has(entity.eid);
 	}
 	private matchesQuery(entity: BaseEntity<C>, query: ComponentSystemQuery<C>): boolean {
 		if(entity.components.entity.dead) {
@@ -221,7 +235,7 @@ export default abstract class ComponentSystem<
 	private getQueryDelta(queryName: string): MembershipDelta<C> {
 		let delta = this.queryDeltas[queryName];
 		if(!delta) {
-			delta = this.queryDeltas[queryName] = { added: [], removed: [] };
+			delta = this.queryDeltas[queryName] = { added: new Set(), removed: new Set() };
 		}
 
 		return delta;
@@ -230,38 +244,27 @@ export default abstract class ComponentSystem<
 	// blocks.  An entity queued for removal this same frame is un-queued instead: the worker never learned it
 	// left, so the net effect is a re-send of fresh components rather than a remove+add churn.
 	private markAdded(delta: MembershipDelta<C>, entity: BaseEntity<C>) {
-		const removedIndex = delta.removed.indexOf(entity.eid);
-		if(removedIndex !== -1) {
-			delta.removed.splice(removedIndex, 1);
-		}
-		if(delta.added.indexOf(entity) === -1) {
-			delta.added.push(entity);
-		}
+		delta.removed.delete(entity.eid);
+		delta.added.add(entity);
 	}
 	// Records that an entity left a query.  If it was only queued to be added this same frame (never sent to the
 	// worker), we just drop the pending add - the worker never knew about it, so there is nothing to remove.
 	private markRemoved(delta: MembershipDelta<C>, entity: BaseEntity<C>) {
-		const addedIndex = delta.added.indexOf(entity);
-		if(addedIndex !== -1) {
-			delta.added.splice(addedIndex, 1);
+		if(delta.added.delete(entity)) {
 			return;
 		}
-		if(delta.removed.indexOf(entity.eid) === -1) {
-			delta.removed.push(entity.eid);
-		}
+
+		delta.removed.add(entity.eid);
 	}
-	private updateEntityList(queryName: string, list: Array<BaseEntity<C>>, entity: BaseEntity<C>, shouldInclude: boolean) {
-		const index = list.indexOf(entity);
+	private updateEntityList(queryName: string, list: Map<number, BaseEntity<C>>, entity: BaseEntity<C>, shouldInclude: boolean) {
 		const delta = this.getQueryDelta(queryName);
 		if(shouldInclude) {
-			if(index === -1) {
-				list.push(entity);
-			}
+			list.set(entity.eid, entity);
 			// Always (re)queue the component blocks: the entity either just joined or a relevant component was
 			// added/removed, so the blocks the worker holds for it may be stale.
 			this.markAdded(delta, entity);
-		} else if(index !== -1) {
-			list.splice(index, 1);
+		} else if(list.delete(entity.eid)) {
+			// Only when it really was a member: `delete` says so, which is the guard the indexOf used to be.
 			this.markRemoved(delta, entity);
 		}
 	}
@@ -271,7 +274,7 @@ export default abstract class ComponentSystem<
 		this.updateEntityList(MAIN_QUERY_NAME, this.entities, entity, shouldAddToMain);
 
 		Object.entries(this.options.queries ?? {}).forEach(([queryName, query]) => {
-			const queryList = this.queryEntities[queryName] ?? (this.queryEntities[queryName] = []);
+			const queryList = this.queryEntities[queryName] ?? (this.queryEntities[queryName] = new Map());
 			this.updateEntityList(queryName, queryList, entity, this.matchesQuery(entity, query));
 		});
 
@@ -285,10 +288,12 @@ export default abstract class ComponentSystem<
 	}
 
 	shouldRun(): boolean {
-		return this.entities.length > 0;
+		return this.entities.size > 0;
 	}
 
 	destroy() {
+		super.destroy();
+
 		if('terminate' in this.worker) {
 			this.worker.terminate();
 		}
@@ -337,9 +342,12 @@ export interface QueryDelta<T extends EntityUpdateComponents = EntityUpdateCompo
 }
 // The main thread's pre-serialization form of a QueryDelta: it holds the live entities (so their component
 // blocks can be resolved lazily at run time), whereas QueryDelta holds the resolved blocks that cross the wire.
+//
+// Sets rather than arrays because queuing a change has to check whether it is already queued, and whether the
+// opposite change is: a burst of deaths would otherwise scan a growing `removed` list once per death.
 interface MembershipDelta<C extends ComponentMap> {
-	added: Array<BaseEntity<C>>
-	removed: Array<number>
+	added: Set<BaseEntity<C>>
+	removed: Set<number>
 }
 
 // Base per-run world data.  gameTime + elapsedTime are always present; games attach anything else
@@ -365,6 +373,21 @@ export interface ComponentSystemCallbacks<C extends ComponentMap = ComponentMap>
 	// here is checked against `C` - the event is the system's own concept, not a component - so a system that
 	// emits one should export the name and the args it comes with alongside its update function.
 	emitEntityEvent(entityId: number, event: string, ...args: Array<unknown>): void
+	// Reports that `event` happened to `entityId`, to be emitted **on the system** once the run completes with
+	// every id it happened to this run in one array:
+	//
+	//   system.on(POSITION_UPDATED_EVENT, (entityIds: Array<number>) => { ... });
+	//
+	// This is the one to reach for when something happens to most of the system's entities every single run.
+	// emitEntityEvent costs an object and an args array per entity in the worker, the clone of both across the
+	// boundary, an eid -> entity lookup on the main thread and then an emit on that entity, all per entity;
+	// this costs a number in an array that already exists, and one listener call for the whole run.
+	//
+	// It carries no args by design.  The blocks the update function just wrote are shared memory, so the main
+	// thread already has the values - `world.getEntityByEid(id)?.components` reads exactly what the worker
+	// wrote, and sending them along would only pay to copy what is already there.  A listener that needs
+	// something that is *not* in a component block still wants emitEntityEvent.
+	emitSystemEvent(event: string, entityId: number): void
 	entityDied(entityId: number): void
 	// Requests that the main thread create an entity from `config` once the run completes.  Unlike killing (which
 	// flips an existing shared-memory flag in place), creation can't happen in the worker, so it is deferred to the

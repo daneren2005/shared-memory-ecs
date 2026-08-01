@@ -98,7 +98,8 @@ export const neighborsDefinition: ComponentDefinition<NeighborsComponent, Int32A
 	// Wait for finishLoading so every other entity is already loaded before we count them.
 	loadInFinishLoading: true,
 	load(entity, memory) {
-		const count = entity.world.entities.filter(other => other !== entity).length;
+		// Everything else in the world, so it is one less than the world holds once this entity is in it.
+		const count = entity.world.entities.has(entity.eid) ? entity.world.entities.size - 1 : entity.world.entities.size;
 		const index = memory.create([count]);
 		const block = memory.getBlock(index);
 

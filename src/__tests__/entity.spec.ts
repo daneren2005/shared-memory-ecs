@@ -155,10 +155,10 @@ describe('entity', () => {
 	it('world removes an entity when it dies', () => {
 		let world = createTestWorld();
 		let entity = world.loadEntity({ maxHealth: 20 });
-		expect(world.entities).toContain(entity);
+		expect(world.entities.has(entity.eid)).toEqual(true);
 
 		killEntity(entity);
 
-		expect(world.entities).not.toContain(entity);
+		expect(world.entities.has(entity.eid)).toEqual(false);
 	});
 });

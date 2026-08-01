@@ -6,7 +6,9 @@ import IterableSystem, { type IterableSystemConfig } from './iterable-system';
 // Iterates the entities that own a given set of components on the main thread.  Entities are added
 // and removed automatically as the world emits entity-added / entity-removed / component changes.
 export default abstract class EntitySystem<C extends ComponentMap, T extends BaseEntity<C> = BaseEntity<C>> extends IterableSystem<C, T> {
-	entities: Array<T> = [];
+	// Keyed by eid so an entity leaving the world costs a constant-time delete here rather than a scan of the
+	// whole membership - see BaseWorld#entities.
+	entities: Map<number, T> = new Map();
 	options: EntitySystemConfig<C>;
 
 	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: EntitySystemConfig<C> = { name: 'EntitySystem' }) {
@@ -35,7 +37,16 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 	}
 
 	getIterables(): Array<T> {
-		return this.entities.filter(entity => !entity.components.entity.dead);
+		// An array because IterableSystem spreads one pass over several frames, so it needs a list it can hold a
+		// position in while the membership underneath it changes.
+		const iterables: Array<T> = [];
+		this.entities.forEach(entity => {
+			if(!entity.components.entity.dead) {
+				iterables.push(entity);
+			}
+		});
+
+		return iterables;
 	}
 	updateIterable(entity: T, elapsedTime: number): void {
 		if(entity.components.entity.dead) {
@@ -48,7 +59,7 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 		return !entity.components.entity.isStatic;
 	}
 	isEntityInSystem(entity: BaseEntity<C>) {
-		return this.entities.indexOf(entity as T) !== -1;
+		return this.entities.has(entity.eid);
 	}
 	abstract updateEntity(entity: T, elapsedTime: number): void;
 
@@ -58,21 +69,18 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 		}
 
 		if(this.filterEntity(entity)) {
-			this.entities.push(entity as T);
+			this.entities.set(entity.eid, entity as T);
 			return true;
 		} else {
 			return false;
 		}
 	}
 	removeEntity(entity: BaseEntity<C>) {
-		let index = this.entities.indexOf(entity as T);
-		if(index !== -1) {
-			this.entities.splice(index, 1);
-		}
+		this.entities.delete(entity.eid);
 	}
 
 	shouldRun(): boolean {
-		return this.entities.length > 0;
+		return this.entities.size > 0;
 	}
 }
 
