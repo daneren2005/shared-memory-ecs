@@ -9,7 +9,7 @@ export const DEFAULT_TICKS_BETWEEN_UPDATES = 1_000;
 
 // One measurement collapsed over a reporting window.  `samples` is how many measurements went into it, which is
 // what tells a system that genuinely cost nothing apart from one that never reported in the first place - a
-// system running on the main thread never reports, and so sits at zero across the board.
+// plain System (one that isn't a ComponentSystem) never reports, and so sits at zero across the board.
 export interface TimingStats {
 	avg: number
 	min: number
@@ -20,7 +20,9 @@ export interface TimingStats {
 // One system's cost, split across the two threads it runs on.
 export interface SystemTimingStats {
 	name: string
-	// The run itself, on the system's worker, as the worker measured it.
+	// The run itself, as the thing that ran it measured it: the system's worker, or - for a forceMainThread
+	// system, or one on a browser without Workers / SharedArrayBuffer - the main-thread fallback, in which case
+	// this is time already counted inside `update` as well.
 	run: TimingStats
 	// The other half of the bill: what handling that run's results cost the thread the world lives on - the
 	// events it reported onto entities, and the entities it asked to be created.
@@ -190,8 +192,8 @@ export default class PerformanceTiming<C extends ComponentMap = ComponentMap> ex
 
 	// The world emits `-worker-finished` immediately before it dispatches a run's events onto entities and
 	// `-worker-events-finished` immediately after, so the gap between the two is exactly what that run cost this
-	// thread.  Neither fires for a system running in the main-thread fallback, which has no off-thread run to
-	// report in the first place.
+	// thread.  Both fire for a system running in the main-thread fallback too - it reports the run it just did
+	// inline - so a forceMainThread system is measured the same way as one on a worker.
 	private trackSystem(system: System<C>) {
 		if(this.systemTimings.has(system.name)) {
 			return;

@@ -20,7 +20,8 @@ fog of war, sub-classed entities, required components, etc).
   needs the `type` plus the entity's serialization. `BaseWorld#loadEntity` always goes through the factory.
 - **`BaseWorld<C>`** – builds one `MemoryComponent` per registered component (attached to that component's
   definition as `world.registry[name].memoryComponent`) and runs systems. It is generic over your component
-  map `C`, so `world.registry`, `entity.components`, `setComponent`, etc. are fully typed.
+  map `C`, so `world.registry`, `entity.components`, `setComponent`, etc. are fully typed. Its entities live
+  in `world.entities`, a `Map` keyed by `eid` — see [Iterating entities](#iterating-entities).
 - **`BaseEntity<C>`** – an `eid`, an optional `id`, and a bag of memory-backed components. It has no
   direct property accessors and only loads/saves component data. Every entity has an `entity` component
   whose `type` (a plain, worker-invisible string) records the factory template it was built from.
@@ -109,6 +110,63 @@ console.log(goblin.save()); // { type: 'goblin', health: 10 } - no templated max
 world.loadEntity(goblin.save());
 ```
 
+## Iterating entities
+
+`world.entities` is a `Map` keyed by `eid`, not an array, and so is `entities` on `EntitySystem` and
+`ComponentSystem`:
+
+```ts
+world.entities.forEach(entity => { ... });   // in the order they were added
+world.entities.get(eid);                     // same as world.getEntityByEid(eid)
+world.entities.size;
+for(const entity of world.entities.values()) { ... }
+
+// For the array methods a Map does not have:
+Array.from(world.entities.values()).filter(entity => !!entity.components.health);
+```
+
+An entity leaves from anywhere in the middle of that collection — every death is one — and finding it in an
+array meant a scan of the whole world, then a shift of everything after it, repeated for each system that
+held it as well. A few thousand entities with a few dozen deaths a run made that the most expensive thing the
+main thread did on a busy frame; a `Map` deletes in constant time. It also replaced the separate
+`entitiesByEid` lookup, so there is only ever one collection to keep straight.
+
+Iteration order is still insertion order, so `load` / `save` round-trip in the order they always did.
+
+## Reading components on a hot path
+
+`entity.components.health!.health` is the way to read a component, and for almost everything it is the right
+one: it is typed, it is readable, and one read costs nothing worth measuring.
+
+It is not free, though, and the cost shows up in exactly one situation — reading the same component off
+*thousands* of entities, *every frame*. The accessor walks several objects to get there and ends in a getter
+closure over the shared block, and because every entity has its own closure those call sites go megamorphic
+once enough entities are alive, so none of it inlines. Measured over ~10,000 entities, reading four values per
+entity cost **~950ns through the accessors against ~140ns straight off the block** — the difference between
+10ms a frame and 1.5ms.
+
+Where that matters, hold the block instead. It is the same memory the accessors read, so nothing changes about
+what you get, and it is what the update functions already work on:
+
+```ts
+import { TRANSFORM_X_INDEX } from '@daneren2005/shared-memory-physics';
+
+// Resolve once, when whatever is doing the reading is set up.
+const health = entity.components.health!;
+const block = world.registry.health.memoryComponent.getBlock(health.index) as Int32Array;
+
+// Then per frame, per entity:
+block[HEALTH_INDEX];
+```
+
+Two things come with that. The block is only valid while the component is: resolve it again if the component
+can be removed and re-added, or hang it off something that dies with the entity. And it is indexed rather than
+named, so the offsets have to be exported alongside the definition — which is why every component in the
+physics library exports its `*_INDEX` constants.
+
+Reach for this when a profile says to, not by default. A menu, a save, a system that touches a dozen entities:
+use the accessors.
+
 ## ComponentSystem workers
 
 `ComponentSystem` needs a `getWorker()` that returns a real `Worker`, and an `updateFunction`. Your
@@ -155,6 +213,41 @@ The args are structured-cloned across the worker boundary, so they have to be pl
 no class instances. Nothing about the name or the args is checked against your component map, since the
 event is the system's own concept rather than a component, so export both alongside the update function that
 emits them.
+
+### Reporting something that happens to everything, every run
+
+Every callback above costs an event object per entity: an allocation in the worker, a structured clone of it,
+an eid lookup on the main thread, and an emit on that entity. That is fine for a death or a hit, which happen
+to a handful of entities a run. It is not fine for a move, which happens to nearly all of them, every run -
+at ten thousand entities that is ten thousand objects and ten thousand emits a frame, and it can easily cost
+more than the simulation it is reporting.
+
+`emitSystemEvent` is the version of that with everything avoidable taken out. Name the event and give it an
+entity id; the whole run arrives on the **system** as one call with one array of ids:
+
+```ts
+// in the update function - just the id, once per entity that moved
+callbacks.emitSystemEvent('position-updated', entityId);
+
+// on the main thread - one call for the run, however many entities are in it
+system.on('position-updated', (entityIds: Array<number>) => {
+	for(const eid of entityIds) {
+		const sprite = sprites.get(eid);
+		// The worker wrote the position into shared memory, so it is already here to read.
+		if(sprite) {
+			const transform = world.getEntityByEid(eid)?.components.transform;
+			...
+		}
+	}
+});
+```
+
+Nothing travels with the id on purpose. The blocks the update just wrote are shared memory, so the main
+thread already holds the values - sending them along would only pay to copy what is already there. Reach for
+`emitEntityEvent` when the thing you want to report is *not* in a component block, and for this when it is.
+
+System events are dispatched before the per-entity events of the same run, so an entity a run both moved and
+killed is still in the world when its move is reported.
 
 ## Measuring performance
 
