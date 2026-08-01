@@ -58,4 +58,4 @@ export { default as WebWorker } from './systems/workers/web-worker';
 export { default as ComponentWebWorker } from './systems/workers/component-web-worker';
 export { default as createComponentWorker } from './systems/workers/create-component-worker';
 export type { default as ComponentWorkerMessage } from './systems/workers/component-worker-message';
-export type { EntityEvent } from './systems/workers/component-worker-message';
+export type { EntityEvent, SystemEvents } from './systems/workers/component-worker-message';

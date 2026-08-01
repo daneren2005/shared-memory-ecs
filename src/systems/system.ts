@@ -1,10 +1,15 @@
+import { EventEmitter } from 'eventemitter3';
 import type BaseWorld from '../world';
 import type { ComponentDefinitionMap, ComponentMap } from '../component-definition';
 
 // Base system: runs on an optional fixed timestep (deltaBetweenRuns) and is driven by BaseWorld#update.
 // Systems only care about the component map `C`, not the World's registry (`R`) or config (`Cfg`), so they
 // reference the World through the widened `ComponentDefinitionMap` and let `Cfg` default.
-export default abstract class System<C extends ComponentMap = ComponentMap> {
+//
+// A system is an EventEmitter so it can report a whole run's worth of something in one go - see
+// ComponentSystem's system events, where an update function names an event and the entity ids it happened to
+// and the main thread gets one call with the lot rather than one per entity.
+export default abstract class System<C extends ComponentMap = ComponentMap> extends EventEmitter {
 	world: BaseWorld<ComponentDefinitionMap, C>;
 	name: string;
 	currentDelta: number = 0;
@@ -12,6 +17,8 @@ export default abstract class System<C extends ComponentMap = ComponentMap> {
 	firstRun: boolean;
 
 	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: SystemConfig = { name: 'System' }) {
+		super();
+
 		this.name = options.name;
 		this.world = world;
 
@@ -54,7 +61,9 @@ export default abstract class System<C extends ComponentMap = ComponentMap> {
 		return true;
 	}
 
-	destroy() {}
+	destroy() {
+		this.removeAllListeners();
+	}
 }
 
 export interface SystemConfig {

@@ -15,6 +15,9 @@ export interface DamageWorld extends ComponentSystemWorld {
 // SharedArrayBuffer, mutating it here is visible on the main thread's entity.
 // `T` lists only the components this system actually uses (its query requires `health`), typed as their
 // concrete backing arrays - so `components.health` is a plain `Int32Array`, not the ComponentTypedArray union.
+// Reported on the system with every entity the run damaged, rather than on each entity in turn.
+export const DAMAGED_ENTITIES_EVENT = 'damaged-entities';
+
 export const damageUpdate: EntityUpdateFunction<Components, Pick<ComponentArrays, 'health'>, DamageWorld> = (world, entityId, components, queries, callbacks) => {
 	const health = components.health;
 
@@ -25,4 +28,7 @@ export const damageUpdate: EntityUpdateFunction<Components, Pick<ComponentArrays
 	// the thing a plain per-property change cannot say in one go.  Named by this update rather than by the ECS,
 	// which is what emitEntityEvent is for.
 	callbacks.emitEntityEvent(entityId, 'damaged', damage, health[0]);
+	// The same thing again, the cheap way: the ids alone, batched onto the system.  A listener reads the health
+	// it wants straight off the shared block, so nothing has to travel with the id.
+	callbacks.emitSystemEvent(DAMAGED_ENTITIES_EVENT, entityId);
 };

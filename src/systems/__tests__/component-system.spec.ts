@@ -1,8 +1,9 @@
 import { ComponentSystem } from '../../index';
 import type { BaseEntity, ComponentSystemQuery, System } from '../../index';
 import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
-import { damageUpdate, type DamageWorld } from '../../__tests__/fixtures/damage-update';
-import { killUpdate } from '../../__tests__/fixtures/kill-update';
+import { eidsOf, listOf } from '../../__tests__/fixtures/entity-collections';
+import { damageUpdate, DAMAGED_ENTITIES_EVENT, type DamageWorld } from '../../__tests__/fixtures/damage-update';
+import { killUpdate, KILLED_ENTITIES_EVENT } from '../../__tests__/fixtures/kill-update';
 import { spawnUpdate } from '../../__tests__/fixtures/spawn-update';
 import { queryTargetUpdate } from '../../__tests__/fixtures/query-target-update';
 
@@ -65,7 +66,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
 		let entity2 = createEntity({ maxHealth: 100 });
 		createEntity({ speed: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, entity2.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid, entity2.eid]);
 	});
 
 	it('with multiple component', () => {
@@ -74,7 +75,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
 		createEntity({ maxHealth: 100 });
 		createEntity({ speed: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid]);
 	});
 
 	it('with not components', () => {
@@ -83,7 +84,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		createEntity({ maxHealth: 100, speed: 100 });
 		let entity2 = createEntity({ maxHealth: 100 });
 		createEntity({ speed: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity2.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity2.eid]);
 	});
 
 	it('with dynamically added components in required list', () => {
@@ -92,15 +93,15 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
 		createEntity({ maxHealth: 100 });
 		let otherEntity = createEntity({ maxHealth: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid]);
 
 		// Do add from correct component being added
 		otherEntity.loadComponent('movement', { speed: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, otherEntity.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid, otherEntity.eid]);
 
 		// Do remove from correct component being removed
 		otherEntity.removeComponent('movement');
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid]);
 	});
 	it('with dynamically added components in not list', () => {
 		let system = useSystem(new StubSystem(world, mode, { required: ['health'], not: ['movement'] }));
@@ -108,13 +109,13 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		createEntity({ maxHealth: 100, speed: 100 });
 		let entity2 = createEntity({ maxHealth: 100 });
 		let otherEntity = createEntity({ maxHealth: 100, speed: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity2.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity2.eid]);
 
 		otherEntity.removeComponent('movement');
-		expect(system.entities.map(e => e.eid)).toEqual([entity2.eid, otherEntity.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity2.eid, otherEntity.eid]);
 
 		otherEntity.loadComponent('movement', { speed: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity2.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity2.eid]);
 	});
 
 	it('query entity list only contains matching entities', () => {
@@ -277,6 +278,32 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(damaged).toEqual([[1, 99]]);
 		});
 
+		// PerformanceTiming is driven entirely off these two events, so both backends have to report a run: a
+		// forceMainThread system costs the calling thread more than a worker one, not less, and reporting
+		// nothing left it reading as free.
+		it('reports the run to the world either side of dispatching its events', async () => {
+			let system = useSystem(new DamageSystem(world, mode));
+			await system.init();
+
+			let entity = createEntity({ maxHealth: 100 });
+			let calls: Array<string> = [];
+			let runTimes: Array<number> = [];
+			world.on(`system-${system.name}-worker-finished`, (runTime: number) => {
+				calls.push('run-finished');
+				runTimes.push(runTime);
+			});
+			entity.on('component-property-updated', () => calls.push('events'));
+			world.on(`system-${system.name}-worker-events-finished`, () => calls.push('events-finished'));
+
+			system.run(16);
+			await flush();
+
+			expect(calls).toEqual(['run-finished', 'events', 'events-finished']);
+			expect(runTimes.length).toEqual(1);
+			// The fallback times itself the same way the real worker does, so neither reports a hardcoded zero.
+			expect(runTimes[0]).toBeGreaterThanOrEqual(0);
+		});
+
 		it('caches components across repeated runs', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
 			await system.init();
@@ -357,13 +384,13 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			await system.init();
 
 			let entity = createEntity({ maxHealth: 100 });
-			expect(world.entities).toContain(entity);
+			expect(world.entities.has(entity.eid)).toEqual(true);
 
 			system.run(16);
 			await flush();
 
 			// The worker flagged it dead in shared memory and reported the death back, so the world removed it.
-			expect(world.entities).not.toContain(entity);
+			expect(world.entities.has(entity.eid)).toEqual(false);
 			expect(system.isEntityInSystem(entity)).toEqual(false);
 		});
 
@@ -372,15 +399,15 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			await system.init();
 
 			let entity = createEntity({ maxHealth: 100 });
-			expect(world.entities).toHaveLength(1);
+			expect(world.entities.size).toEqual(1);
 
 			system.run(16);
 			await flush();
 
 			// The worker can't create the entity itself, so it asked the main thread to; loadEntity ran on
 			// run-complete, leaving the original entity plus the one it spawned.
-			expect(world.entities).toHaveLength(2);
-			let spawned = world.entities.find(other => other !== entity);
+			expect(world.entities.size).toEqual(2);
+			let spawned = listOf(world.entities).find(other => other !== entity);
 			expect(spawned?.components.health?.maxHealth).toEqual(10);
 			expect(spawned?.components.health?.health).toEqual(10);
 
@@ -412,7 +439,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 			expect(died).toEqual(true);
 			// The death event ran the world's cleanup, removing the sub-query-only entity.
-			expect(world.entities).not.toContain(target);
+			expect(world.entities.has(target.eid)).toEqual(false);
 		});
 
 		it('routes a component-property-updated event to an entity only present in a sub-query', async () => {
@@ -433,6 +460,90 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 			expect(events).toEqual([50]);
 		});
+
+		// The other half of the event story: an update that reports the same thing about most of its entities
+		// every run names it once and hands over ids, and the whole run arrives as one call on the system.
+		describe('system events', () => {
+			it('emits one event on the system carrying every entity id it happened to', async () => {
+				let system = useSystem(new DamageSystem(world, mode));
+				await system.init();
+
+				let first = createEntity({ maxHealth: 100 });
+				let second = createEntity({ maxHealth: 100 });
+
+				let batches: Array<Array<number>> = [];
+				system.on(DAMAGED_ENTITIES_EVENT, (entityIds: Array<number>) => {
+					batches.push(entityIds);
+				});
+
+				system.run(16);
+				await flush();
+
+				// One call for the run, not one per entity.
+				expect(batches).toEqual([[first.eid, second.eid]]);
+				// Nothing travelled with the ids, because the values are already there in shared memory.
+				expect(first.components.health?.health).toEqual(99);
+				expect(second.components.health?.health).toEqual(99);
+			});
+
+			it('does not emit an event no entity reported this run', async () => {
+				let system = useSystem(new DamageSystem(world, mode));
+				await system.init();
+
+				// Nothing this system runs over, so its update never reports anything.
+				createEntity({ speed: 100 });
+
+				let called = 0;
+				system.on(DAMAGED_ENTITIES_EVENT, () => {
+					called++;
+				});
+
+				system.run(16);
+				await flush();
+
+				expect(called).toEqual(0);
+			});
+
+			it('reports a fresh batch each run rather than accumulating', async () => {
+				let system = useSystem(new DamageSystem(world, mode));
+				await system.init();
+
+				let entity = createEntity({ maxHealth: 100 });
+
+				let batches: Array<Array<number>> = [];
+				system.on(DAMAGED_ENTITIES_EVENT, (entityIds: Array<number>) => {
+					batches.push(entityIds);
+				});
+
+				system.run(16);
+				await flush();
+				system.run(16);
+				await flush();
+
+				expect(batches).toEqual([[entity.eid], [entity.eid]]);
+			});
+
+			// System events are dispatched ahead of the per-entity ones, so a listener can still resolve an entity
+			// the same run went on to kill - `death` is a per-entity event, and handling it takes the entity out of
+			// the world.
+			it('emits before the per-entity events of the same run', async () => {
+				let system = useSystem(new KillSystem(world, mode));
+				await system.init();
+
+				let entity = createEntity({ maxHealth: 100 });
+
+				let aliveWhenReported: boolean | undefined;
+				system.on(KILLED_ENTITIES_EVENT, (entityIds: Array<number>) => {
+					aliveWhenReported = entityIds.every(eid => !!world.getEntityByEid(eid));
+				});
+
+				system.run(16);
+				await flush();
+
+				expect(aliveWhenReported).toEqual(true);
+				expect(world.entities.has(entity.eid)).toEqual(false);
+			});
+		});
 	});
 });
 
@@ -449,18 +560,19 @@ class StubSystem extends ComponentSystem<Components, {}> {
 	}
 
 	getQueryEntityEids(queryName: string): Array<number> {
-		const queryEntities = Reflect.get(this, 'queryEntities') as { [key: string]: Array<BaseEntity<Components>> };
-		return (queryEntities[queryName] ?? []).map(entity => entity.eid);
+		const queryEntities = Reflect.get(this, 'queryEntities') as { [key: string]: Map<number, BaseEntity<Components>> };
+		const list = queryEntities[queryName];
+		return list ? eidsOf(list) : [];
 	}
 
 	// The pending membership delta the next run() will flush to the worker, resolved to eids for assertions.
 	// Defaults to the main query (its internal key is '___main').
 	getPendingDelta(queryName = '___main'): { added: Array<number>, removed: Array<number> } {
-		const deltas = Reflect.get(this, 'queryDeltas') as { [key: string]: { added: Array<BaseEntity<Components>>, removed: Array<number> } };
-		const delta = deltas[queryName] ?? { added: [], removed: [] };
+		const deltas = Reflect.get(this, 'queryDeltas') as { [key: string]: { added: Set<BaseEntity<Components>>, removed: Set<number> } };
+		const delta = deltas[queryName];
 		return {
-			added: delta.added.map(entity => entity.eid),
-			removed: [...delta.removed],
+			added: delta ? Array.from(delta.added, entity => entity.eid) : [],
+			removed: delta ? Array.from(delta.removed) : [],
 		};
 	}
 }

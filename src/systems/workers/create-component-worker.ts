@@ -1,5 +1,5 @@
 import type ComponentWorkerMessage from './component-worker-message';
-import type { EntityEvent } from './component-worker-message';
+import type { EntityEvent, SystemEvents } from './component-worker-message';
 import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 import { applyQueryDelta } from './apply-query-delta';
@@ -34,6 +34,7 @@ export default function createComponentWorker<
 		} else if(message.type === 'run') {
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
+			let systemEvents: SystemEvents = {};
 			let createdEntities: Array<Record<string, unknown>> = [];
 
 			entities = applyQueryDelta(entities, message.entities as QueryDelta<T>);
@@ -59,6 +60,11 @@ export default function createComponentWorker<
 						event,
 						args,
 					});
+				},
+				emitSystemEvent(event: string, entityId: number) {
+					// The list per event name is only made the first time that event comes up in a run, so a system
+					// that has an event it rarely reports does not pay an empty array for it every run.
+					(systemEvents[event] ?? (systemEvents[event] = [])).push(entityId);
 				},
 				entityDied(entityId: number) {
 					entityEvents.push({
@@ -92,6 +98,7 @@ export default function createComponentWorker<
 				type: 'run-complete',
 				runTime,
 				events: entityEvents,
+				systemEvents,
 				created: createdEntities,
 			});
 		}
