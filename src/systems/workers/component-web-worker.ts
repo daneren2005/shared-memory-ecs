@@ -1,7 +1,7 @@
 import WebWorker from './web-worker';
 import { applyQueryDelta } from './apply-query-delta';
 import type ComponentWorkerMessage from './component-worker-message';
-import type { EntityEvent } from './component-worker-message';
+import type { EntityEvent, SystemEvents } from './component-worker-message';
 import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 
@@ -24,7 +24,11 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 				type: 'loaded',
 			});
 		} else if(message.type === 'run') {
+			// Timed the same way the real worker times itself, so a forceMainThread system reports a real run cost
+			// to PerformanceTiming rather than sitting at zero.
+			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
+			let systemEvents: SystemEvents = {};
 			let createdEntities: Array<Record<string, unknown>> = [];
 
 			this.entities = applyQueryDelta(this.entities, message.entities as QueryDelta<T>);
@@ -51,6 +55,9 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 						args,
 					});
 				},
+				emitSystemEvent(event: string, entityId: number) {
+					(systemEvents[event] ?? (systemEvents[event] = [])).push(entityId);
+				},
 				entityDied(entityId: number) {
 					entityEvents.push({
 						entityId,
@@ -75,10 +82,13 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 				}
 			}
 
+			const runTime = performance.now() - start;
+
 			this.onMessageTyped({
 				type: 'run-complete',
-				runTime: 0,
+				runTime,
 				events: entityEvents,
+				systemEvents,
 				created: createdEntities,
 			});
 		}

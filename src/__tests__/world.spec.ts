@@ -1,5 +1,6 @@
 import { System, killEntity } from '../index';
 import { createTestWorld, type Components, type TestWorld } from './fixtures/components';
+import { listOf } from './fixtures/entity-collections';
 
 describe('world load', () => {
 	it('loads every entity from the config', () => {
@@ -11,10 +12,10 @@ describe('world load', () => {
 			],
 		});
 
-		expect(world.entities.length).toEqual(2);
-		expect(world.entities[0].components.health?.maxHealth).toEqual(20);
-		expect(world.entities[0].components.movement?.speed).toEqual(5);
-		expect(world.entities[1].components.health?.maxHealth).toEqual(10);
+		expect(world.entities.size).toEqual(2);
+		expect(listOf(world.entities)[0].components.health?.maxHealth).toEqual(20);
+		expect(listOf(world.entities)[0].components.movement?.speed).toEqual(5);
+		expect(listOf(world.entities)[1].components.health?.maxHealth).toEqual(10);
 	});
 
 	it('clears existing entities and frees their memory before loading', () => {
@@ -24,11 +25,11 @@ describe('world load', () => {
 
 		world.load({ entities: [{ maxHealth: 10 }] });
 
-		expect(world.entities).not.toContain(old);
+		expect(world.entities.has(old.eid)).toEqual(false);
 		expect(world.getEntityByEid(old.eid)).toBeUndefined();
 		// The old entity's health block was freed, so only the newly loaded entity's block remains.
 		expect(world.registry.health.memoryComponent.length).toEqual(1);
-		expect(world.entities[0].components.health?.maxHealth).toEqual(10);
+		expect(listOf(world.entities)[0].components.health?.maxHealth).toEqual(10);
 	});
 
 	it('clears existing systems before loading', () => {
@@ -47,7 +48,7 @@ describe('world load', () => {
 
 		world.load({ entities: [] });
 
-		expect(world.entities.length).toEqual(0);
+		expect(world.entities.size).toEqual(0);
 		expect(world.systems.length).toEqual(1);
 	});
 
@@ -65,7 +66,7 @@ describe('world load', () => {
 			],
 		});
 
-		let counter = world.entities[0];
+		let counter = listOf(world.entities)[0];
 		expect(counter.components.neighbors?.count).toEqual(3);
 	});
 
@@ -80,8 +81,8 @@ describe('world load', () => {
 		});
 
 		// Both counters see the other two entities, no matter where they sit in the load order.
-		expect(world.entities[0].components.neighbors?.count).toEqual(2);
-		expect(world.entities[2].components.neighbors?.count).toEqual(2);
+		expect(listOf(world.entities)[0].components.neighbors?.count).toEqual(2);
+		expect(listOf(world.entities)[2].components.neighbors?.count).toEqual(2);
 	});
 
 	it('restores the world clocks from the config', () => {
@@ -128,8 +129,8 @@ describe('world load', () => {
 		// Each entity is loaded with created = false (so addEntity stays quiet), then announced exactly once by
 		// load - so we get one event per entity, in order, and no duplicates.
 		expect(added.length).toEqual(2);
-		expect(added[0]).toBe(world.entities[0]);
-		expect(added[1]).toBe(world.entities[1]);
+		expect(added[0]).toBe(listOf(world.entities)[0]);
+		expect(added[1]).toBe(listOf(world.entities)[1]);
 	});
 
 	it('emits entity-added once for an entity added through loadEntity', () => {
@@ -147,7 +148,7 @@ describe('world load', () => {
 	it('calls removeEntity once when an entity loaded through load dies', () => {
 		let world = createTestWorld();
 		world.load({ entities: [{ maxHealth: 20 }] });
-		let entity = world.entities[0];
+		let entity = listOf(world.entities)[0];
 
 		// The death handler is registered exactly once (by load, not also by the created = false addEntity), so a
 		// single kill removes the entity a single time rather than double-freeing its memory.
@@ -156,7 +157,7 @@ describe('world load', () => {
 
 		expect(removeEntity).toHaveBeenCalledTimes(1);
 		expect(removeEntity).toHaveBeenCalledWith(entity);
-		expect(world.entities).not.toContain(entity);
+		expect(world.entities.has(entity.eid)).toEqual(false);
 	});
 
 	it('calls removeEntity once when an entity added through loadEntity dies', () => {
@@ -168,7 +169,37 @@ describe('world load', () => {
 
 		expect(removeEntity).toHaveBeenCalledTimes(1);
 		expect(removeEntity).toHaveBeenCalledWith(entity);
-		expect(world.entities).not.toContain(entity);
+		expect(world.entities.has(entity.eid)).toEqual(false);
+	});
+
+	it('keeps the entities it is left with in the order they were added', () => {
+		let world = createTestWorld();
+		let first = world.loadEntity({ maxHealth: 10 });
+		let second = world.loadEntity({ maxHealth: 20 });
+		let third = world.loadEntity({ maxHealth: 30 });
+
+		// Removing from the middle must not reorder what is left - load / save order is iteration order, so a
+		// cheaper removal that swapped the last entity into the hole would quietly shuffle a saved world.
+		world.removeEntity(second);
+
+		expect(listOf(world.entities).map(entity => entity.eid)).toEqual([first.eid, third.eid]);
+	});
+
+	it('removes an entity in constant time regardless of how many others there are', () => {
+		// A guard on the thing this collection exists for.  Removal used to scan the whole world per entity, so
+		// clearing out a large world cost time in the square of its size; both of these are linear now, and the
+		// ratio between them stays near 1 rather than growing with the size difference.
+
+		// Warm the JIT so the first (small) run is not paying for compilation the second one gets for free.
+		timeToEmpty(500);
+
+		const small = timeToEmpty(500);
+		const large = timeToEmpty(5000);
+
+		// Ten times the entities, so an O(n) removal would make each one about ten times dearer.  The bound is
+		// loose because this is wall-clock time on a shared machine - it is here to catch a return to quadratic,
+		// not to measure anything.
+		expect(large / small).toBeLessThan(4);
 	});
 });
 
@@ -268,4 +299,20 @@ class RecordingSystem extends System<Components> {
 	run(elapsedTime: number) {
 		this.elapsed.push(elapsedTime);
 	}
+}
+
+// Average cost of removing one entity from a world of `count` of them, for the constant-time removal guard.
+function timeToEmpty(count: number): number {
+	const world = createTestWorld();
+	for(let i = 0; i < count; i++) {
+		world.loadEntity({ maxHealth: 10 });
+	}
+
+	const entities = listOf(world.entities);
+	const start = performance.now();
+	for(const entity of entities) {
+		world.removeEntity(entity);
+	}
+
+	return (performance.now() - start) / count;
 }

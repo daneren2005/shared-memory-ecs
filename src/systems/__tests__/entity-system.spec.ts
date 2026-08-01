@@ -1,6 +1,7 @@
 import { EntitySystem } from '../../index';
 import type { BaseEntity } from '../../index';
 import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
+import { eidsOf, listOf } from '../../__tests__/fixtures/entity-collections';
 
 describe('entity-system', () => {
 	let world: TestWorld;
@@ -15,16 +16,16 @@ describe('entity-system', () => {
 		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
 		let entity2 = createEntity({ maxHealth: 100 });
 		createEntity({ speed: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, entity2.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid, entity2.eid]);
 
 		// Reloading the saved entities into a fresh world reproduces the same membership.  save carries only
 		// serialization, so reload layers it over each entity's defining config (its template).
-		let saves = world.entities.map(e => ({ ...e.config, ...e.save() }));
+		let saves = listOf(world.entities).map(e => ({ ...e.config, ...e.save() }));
 		let newWorld = createTestWorld();
 		let newSystem = new StubSystem(newWorld, ['health']);
 		saves.forEach(save => newWorld.loadEntity(save));
-		expect(newSystem.entities.length).toEqual(2);
-		expect(newSystem.entities.every(e => !!e.components.health)).toEqual(true);
+		expect(newSystem.entities.size).toEqual(2);
+		expect(listOf(newSystem.entities).every(e => !!e.components.health)).toEqual(true);
 	});
 
 	it('with multiple components', () => {
@@ -34,14 +35,14 @@ describe('entity-system', () => {
 		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
 		createEntity({ maxHealth: 100 });
 		createEntity({ speed: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid]);
 
 		// save carries only serialization, so reload layers it over each entity's defining config.
-		let saves = world.entities.map(e => ({ ...e.config, ...e.save() }));
+		let saves = listOf(world.entities).map(e => ({ ...e.config, ...e.save() }));
 		let newWorld = createTestWorld();
 		let newSystem = new StubSystem(newWorld, ['health', 'movement']);
 		saves.forEach(save => newWorld.loadEntity(save));
-		expect(newSystem.entities.length).toEqual(1);
+		expect(newSystem.entities.size).toEqual(1);
 	});
 
 	it('with dynamically added components', () => {
@@ -51,23 +52,23 @@ describe('entity-system', () => {
 		let entity1 = createEntity({ maxHealth: 100, speed: 100 });
 		let entity2 = createEntity({ maxHealth: 100 });
 		let otherEntity = createEntity({ speed: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, entity2.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid, entity2.eid]);
 
 		// Do not add from other component being added
 		otherEntity.loadComponent('movement', { speed: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, entity2.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid, entity2.eid]);
 
 		// Do add from correct component being added
 		otherEntity.loadComponent('health', { maxHealth: 100 });
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, entity2.eid, otherEntity.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid, entity2.eid, otherEntity.eid]);
 
 		// Do not remove from other component being removed
 		otherEntity.removeComponent('movement');
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, entity2.eid, otherEntity.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid, entity2.eid, otherEntity.eid]);
 
 		// Do remove from correct component being removed
 		otherEntity.removeComponent('health');
-		expect(system.entities.map(e => e.eid)).toEqual([entity1.eid, entity2.eid]);
+		expect(eidsOf(system.entities)).toEqual([entity1.eid, entity2.eid]);
 	});
 
 	function createEntity(config: any): BaseEntity<Components> {

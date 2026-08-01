@@ -54,8 +54,15 @@ export default class BaseWorld<
 	// Every entity is built through the factory, which expands its `type` against the registered templates.
 	factory: EntityFactory<C, Cfg>;
 
-	entities: Array<BaseEntity<C, Cfg>> = [];
-	entitiesByEid: { [eid: number]: BaseEntity<C, Cfg> } = {};
+	// Every entity in the world, keyed by eid.  A Map rather than an array because entities leave one at a time
+	// from anywhere in the middle of it - every death is one - and an array costs a scan to find the one that
+	// left plus a shift of everything after it.  At a few thousand entities with a few dozen deaths a run that
+	// was the single most expensive thing the main thread did on a busy frame.  A Map deletes in constant time
+	// and still iterates in insertion order, so load / save order is exactly what it was.
+	//
+	// It replaces the separate `entitiesByEid` lookup as well: that was the same entities a second time, and one
+	// collection that is already keyed the way things are looked up cannot fall out of step with itself.
+	entities: Map<number, BaseEntity<C, Cfg>> = new Map();
 	systems: Array<System<C>> = [];
 
 	gameTime = 0;
@@ -98,8 +105,7 @@ export default class BaseWorld<
 	}
 
 	addEntity(entity: BaseEntity<C, Cfg>, created = true): BaseEntity<C, Cfg> {
-		this.entities.push(entity);
-		this.entitiesByEid[entity.eid] = entity;
+		this.entities.set(entity.eid, entity);
 		entity.world = this;
 
 		entity.on('component-added', (name: keyof C) => {
@@ -132,7 +138,7 @@ export default class BaseWorld<
 	// them, since the whole batch is guaranteed loaded by then.
 	load(config: WorldConfig<Cfg>) {
 		// Iterate over a copy since removeEntity mutates `this.entities`.
-		for(let entity of this.entities.slice()) {
+		for(let entity of Array.from(this.entities.values())) {
 			this.removeEntity(entity);
 		}
 		this.systems.forEach(system => system.clear());
@@ -153,10 +159,9 @@ export default class BaseWorld<
 		this.timeScale = config.timeScale ?? 1;
 	}
 	removeEntity(entity: BaseEntity<C, Cfg>) {
-		let index = this.entities.indexOf(entity);
-		if(index !== -1) {
-			this.entities.splice(index, 1);
-			delete this.entitiesByEid[entity.eid];
+		// `delete` reports whether it was actually in the world, which is the same guard the old indexOf was:
+		// removing an entity twice frees its memory again but only tells the systems about it once.
+		if(this.entities.delete(entity.eid)) {
 			this.emit('entity-removed', entity);
 		}
 
@@ -166,7 +171,7 @@ export default class BaseWorld<
 		this.removeEntity(entity);
 	}
 	getEntityByEid(eid: number): BaseEntity<C, Cfg> | undefined {
-		return this.entitiesByEid[eid];
+		return this.entities.get(eid);
 	}
 
 	addSystem<T extends System<C>>(system: T): T {
