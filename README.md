@@ -170,7 +170,8 @@ use the accessors.
 ## ComponentSystem workers
 
 `ComponentSystem` needs a `getWorker()` that returns a real `Worker`, and an `updateFunction`. Your
-worker entry file calls `createComponentWorker(self, updateFunction)`. When Web Workers or
+worker entry file calls `createComponentWorker(self, updateFunction)`, importing it from the
+[`/worker` subpath](#importing-in-workers) so the worker bundle stays small. When Web Workers or
 `SharedArrayBuffer` are unavailable it transparently falls back to running the same update function on
 the main thread. Attach any extra per-run data (the equivalent of the old faction/fog-of-war fields)
 by overriding `addDataToWorld(world)`. Declare its shape with the `W` type parameter (an interface
@@ -188,6 +189,29 @@ class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, D
 	addDataToWorld(world: DamageWorld) { world.damage = 5; }
 }
 ```
+
+### Importing in workers
+
+Each worker entry file is bundled on its own, and a single-entry bundle cannot tree-shake this package's
+barrel: importing `createComponentWorker` from `@daneren2005/shared-memory-ecs` drags the whole library -
+`BaseWorld`, every system, their `@daneren2005/shared-memory-objects` dependencies - into the worker, even
+though a worker never runs any of it (easily ~20kb of dead code per worker). Import worker-side helpers from
+the `@daneren2005/shared-memory-ecs/worker` subpath instead. It exposes only what runs in a worker -
+`createComponentWorker`, `createEntityWorker`, `killEntityWorker`, `DEAD_INDEX` (plus the worker-relevant
+types) - so the bundle stays tiny:
+
+```ts
+// damage.worker.ts - the worker entry file
+import { createComponentWorker } from '@daneren2005/shared-memory-ecs/worker';
+import { damageUpdate } from './damage-update';
+
+createComponentWorker(self, damageUpdate);
+```
+
+The same applies to any module the worker file pulls in: an update function that calls `createEntityWorker`
+or `killEntityWorker` should import them from `/worker` too. Type-only imports (`EntityUpdateFunction`,
+`ComponentSystemWorld`, ...) can come from either path since types are erased, and main-thread code
+(`ComponentSystem`, `BaseWorld`, `EntityFactory`, ...) keeps importing from the package root.
 
 ### Reporting back to the main thread
 

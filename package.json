@@ -4,6 +4,7 @@
 	"author": "Scott Jackson",
 	"version": "1.2.1",
 	"type": "module",
+	"sideEffects": false,
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/daneren2005/shared-memory-ecs.git"
@@ -19,6 +20,12 @@
 			"import": {
 				"types": "./dist/index.d.ts",
 				"default": "./dist/index.js"
+			}
+		},
+		"./worker": {
+			"import": {
+				"types": "./dist/worker.d.ts",
+				"default": "./dist/worker.js"
 			}
 		}
 	},
@@ -53,6 +60,6 @@
 		"vitest": "^4.1.10"
 	},
 	"peerDependencies": {
-		"@daneren2005/shared-memory-objects": "^1.0.0"
+		"@daneren2005/shared-memory-objects": "^1.1.0"
 	}
 }

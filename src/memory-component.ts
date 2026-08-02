@@ -1,4 +1,6 @@
-import { LocalPool, type MemoryHeap, type TypedArrayConstructor } from '@daneren2005/shared-memory-objects';
+import LocalPool from '@daneren2005/shared-memory-objects/local-pool';
+import type MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
+import type { TypedArrayConstructor } from '@daneren2005/shared-memory-objects/interfaces/typed-array-constructor';
 
 // The typed arrays a MemoryComponent can be backed by.  Kept narrower than the package's TypedArray
 // union on purpose since these are the only types we allocate blocks of.
