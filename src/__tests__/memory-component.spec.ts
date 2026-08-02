@@ -1,4 +1,4 @@
-import { MemoryHeap } from '@daneren2005/shared-memory-objects';
+import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
 import { MemoryComponent } from '../index';
 
 describe('memory component', () => {

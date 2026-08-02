@@ -1,4 +1,4 @@
-import type { TypedArrayConstructor } from '@daneren2005/shared-memory-objects';
+import type { TypedArrayConstructor } from '@daneren2005/shared-memory-objects/interfaces/typed-array-constructor';
 import type MemoryComponent from './memory-component';
 import type { ComponentTypedArray } from './memory-component';
 import type BaseEntity from './entity';

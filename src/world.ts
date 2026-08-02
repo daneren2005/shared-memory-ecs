@@ -1,5 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
-import { MAX_BYTE_OFFSET_LENGTH, MemoryHeap } from '@daneren2005/shared-memory-objects';
+import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
+import { MAX_BYTE_OFFSET_LENGTH } from '@daneren2005/shared-memory-objects/utils/pointer';
 import MemoryComponent from './memory-component';
 import type BaseEntity from './entity';
 import type System from './systems/system';
