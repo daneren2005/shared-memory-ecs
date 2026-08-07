@@ -1,21 +1,12 @@
 import type { ComponentSystemWorld, EntityUpdateFunction } from '../../index';
 import type { ComponentArrays, Components } from './components';
 
-// Per-run world shape this system attaches through addDataToWorld: an optional per-run damage override.
 export interface DamageWorld extends ComponentSystemWorld {
 	damage?: number
 }
 
-// Shared update logic used by both ComponentSystem backends: the main-thread ComponentWebWorker runs it
-// directly (passed as `updateFunction`), while the real worker file imports it and hands it to
-// createComponentWorker.  Keeping it in one place means both paths run identical logic.
-//
-// Each run subtracts `world.damage` (default 1) from the entity's current health - index 0 of the shared
-// Int32Array block - and reports the change back through the callbacks.  Because the block lives in a
-// SharedArrayBuffer, mutating it here is visible on the main thread's entity.
-// `T` lists only the components this system actually uses (its query requires `health`), typed as their
-// concrete backing arrays - so `components.health` is a plain `Int32Array`, not the ComponentTypedArray union.
-// Reported on the system with every entity the run damaged, rather than on each entity in turn.
+// Shared update logic both ComponentSystem backends run, so they stay behavior-identical. Subtracts
+// world.damage (default 1) from health and reports the change back through the callbacks.
 export const DAMAGED_ENTITIES_EVENT = 'damaged-entities';
 
 export const damageUpdate: EntityUpdateFunction<Components, Pick<ComponentArrays, 'health'>, DamageWorld> = (world, entityId, components, queries, callbacks) => {
@@ -24,11 +15,8 @@ export const damageUpdate: EntityUpdateFunction<Components, Pick<ComponentArrays
 	const damage = world.damage ?? 1;
 	health[0] -= damage;
 	callbacks.entityComponentChanged(entityId, 'health', 'health', health[0]);
-	// A system's own event alongside the component change, carrying both what was taken off and what is left -
-	// the thing a plain per-property change cannot say in one go.  Named by this update rather than by the ECS,
-	// which is what emitEntityEvent is for.
+	// A custom event carrying both damage taken and health left, which a per-property change can't say at once.
 	callbacks.emitEntityEvent(entityId, 'damaged', damage, health[0]);
-	// The same thing again, the cheap way: the ids alone, batched onto the system.  A listener reads the health
-	// it wants straight off the shared block, so nothing has to travel with the id.
+	// The same thing the cheap way: ids batched onto the system, values read off the shared block.
 	callbacks.emitSystemEvent(DAMAGED_ENTITIES_EVENT, entityId);
 };

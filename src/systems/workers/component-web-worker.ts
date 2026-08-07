@@ -5,9 +5,7 @@ import type { EntityEvent, SystemEvents } from './component-worker-message';
 import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 
-// Main-thread fallback that runs the update function synchronously when real Web Workers /
-// SharedArrayBuffer are unavailable.  It runs in-process but still keeps persistent per-query lists and applies
-// the same membership deltas the real worker does, so both backends stay behavior-identical.
+// Main-thread fallback that runs the update function synchronously, mirroring the real worker's behavior.
 export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> extends WebWorker {
 	private updateFunction: EntityUpdateFunction<C, T, W>;
 	private entities: Array<UpdateEntityConfigObject<T>> = [];
@@ -24,8 +22,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 				type: 'loaded',
 			});
 		} else if(message.type === 'run') {
-			// Timed the same way the real worker times itself, so a forceMainThread system reports a real run cost
-			// to PerformanceTiming rather than sitting at zero.
+			// Timed like the real worker so a forceMainThread system reports a real run cost, not zero.
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
 			let systemEvents: SystemEvents = {};

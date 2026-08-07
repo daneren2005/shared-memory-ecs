@@ -2,8 +2,6 @@ import type BaseWorld from '../world';
 import type { ComponentDefinitionMap, ComponentMap } from '../component-definition';
 import System, { type SystemConfig } from './system';
 
-// A system that iterates a list of instances, spreading the work across multiple frames if a single
-// pass would exceed maxMsPerFrame.
 export default abstract class IterableSystem<C extends ComponentMap, T> extends System<C> {
 	remainingInstancesToRun: Array<T> = [];
 	remainingInstancesStartTime: number | null = null;

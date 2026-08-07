@@ -27,7 +27,6 @@ describe('world load', () => {
 
 		expect(world.entities.has(old.eid)).toEqual(false);
 		expect(world.getEntityByEid(old.eid)).toBeUndefined();
-		// The old entity's health block was freed, so only the newly loaded entity's block remains.
 		expect(world.registry.health.memoryComponent.length).toEqual(1);
 		expect(listOf(world.entities)[0].components.health?.maxHealth).toEqual(10);
 	});
@@ -56,9 +55,7 @@ describe('world load', () => {
 		let world = createTestWorld();
 		world.load({
 			entities: [
-				// The counter is first in the list, yet it still counts all three of the other entities.  If
-				// finishLoading ran as each entity was created (rather than after the whole batch), it would see
-				// zero neighbors - so the count proves the deferral.
+				// Counter is first yet counts all three others; without deferral it would see zero.
 				{ countsNeighbors: true },
 				{ maxHealth: 20 },
 				{ maxHealth: 10 },
@@ -80,7 +77,6 @@ describe('world load', () => {
 			],
 		});
 
-		// Both counters see the other two entities, no matter where they sit in the load order.
 		expect(listOf(world.entities)[0].components.neighbors?.count).toEqual(2);
 		expect(listOf(world.entities)[2].components.neighbors?.count).toEqual(2);
 	});
@@ -126,8 +122,6 @@ describe('world load', () => {
 			],
 		});
 
-		// Each entity is loaded with created = false (so addEntity stays quiet), then announced exactly once by
-		// load - so we get one event per entity, in order, and no duplicates.
 		expect(added.length).toEqual(2);
 		expect(added[0]).toBe(listOf(world.entities)[0]);
 		expect(added[1]).toBe(listOf(world.entities)[1]);
@@ -150,8 +144,7 @@ describe('world load', () => {
 		world.load({ entities: [{ maxHealth: 20 }] });
 		let entity = listOf(world.entities)[0];
 
-		// The death handler is registered exactly once (by load, not also by the created = false addEntity), so a
-		// single kill removes the entity a single time rather than double-freeing its memory.
+		// The death handler is registered once (by load, not the created = false addEntity), so one kill removes once.
 		let removeEntity = vi.spyOn(world, 'removeEntity');
 		killEntity(entity);
 
@@ -178,27 +171,22 @@ describe('world load', () => {
 		let second = world.loadEntity({ maxHealth: 20 });
 		let third = world.loadEntity({ maxHealth: 30 });
 
-		// Removing from the middle must not reorder what is left - load / save order is iteration order, so a
-		// cheaper removal that swapped the last entity into the hole would quietly shuffle a saved world.
+		// Removing from the middle must not reorder the rest: iteration order is load/save order.
 		world.removeEntity(second);
 
 		expect(listOf(world.entities).map(entity => entity.eid)).toEqual([first.eid, third.eid]);
 	});
 
 	it('removes an entity in constant time regardless of how many others there are', () => {
-		// A guard on the thing this collection exists for.  Removal used to scan the whole world per entity, so
-		// clearing out a large world cost time in the square of its size; both of these are linear now, and the
-		// ratio between them stays near 1 rather than growing with the size difference.
+		// Guards against a return to quadratic clearing; per-entity removal cost should stay flat with size.
 
-		// Warm the JIT so the first (small) run is not paying for compilation the second one gets for free.
+		// Warm the JIT so the first run isn't paying for compilation the second gets for free.
 		timeToEmpty(500);
 
 		const small = timeToEmpty(500);
 		const large = timeToEmpty(5000);
 
-		// Ten times the entities, so an O(n) removal would make each one about ten times dearer.  The bound is
-		// loose because this is wall-clock time on a shared machine - it is here to catch a return to quadratic,
-		// not to measure anything.
+		// Loose bound (wall-clock on a shared machine): an O(n) removal would make each ~10x dearer.
 		expect(large / small).toBeLessThan(4);
 	});
 });
@@ -229,7 +217,6 @@ describe('world time', () => {
 
 		world.update(100);
 
-		// gameTime is the scaled simulation clock; playerTime is the unscaled wall clock.
 		expect(world.gameTime).toEqual(200);
 		expect(world.playerTime).toEqual(100);
 	});
@@ -288,7 +275,6 @@ class NoopSystem extends System<Components> {
 	run() {}
 }
 
-// Records every elapsedTime it is run with so tests can assert whether (and with what value) it ran.
 class RecordingSystem extends System<Components> {
 	elapsed: Array<number> = [];
 
@@ -301,7 +287,6 @@ class RecordingSystem extends System<Components> {
 	}
 }
 
-// Average cost of removing one entity from a world of `count` of them, for the constant-time removal guard.
 function timeToEmpty(count: number): number {
 	const world = createTestWorld();
 	for(let i = 0; i < count; i++) {

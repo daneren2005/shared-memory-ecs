@@ -4,8 +4,7 @@ import { createTestWorld, type Components, type Config } from './fixtures/compon
 describe('entity', () => {
 	it('load only loads registered component data', () => {
 		let world = createTestWorld();
-		// The typed config is now closed, so cast to mirror an untyped/dynamic config (e.g. loaded from disk)
-		// carrying a prop no component claims - it should be ignored rather than assigned onto the entity.
+		// A prop no component claims should be ignored, not assigned onto the entity.
 		let entity = world.loadEntity({
 			maxHealth: 20,
 			speed: 5,
@@ -26,8 +25,6 @@ describe('entity', () => {
 			speed: 5,
 		});
 
-		// save returns only serialization: isStatic, maxHealth and speed are all Config, so the output is just
-		// the runtime-derived health (which differs from max).
 		expect(entity.save()).toEqual({
 			health: 10,
 		});
@@ -44,8 +41,6 @@ describe('entity', () => {
 		let entity = world.loadEntity(config);
 		let savedConfig = entity.save();
 
-		// save only carries serialization, so reloading re-applies the defining config (the template) and
-		// layers the saved runtime state on top - which round-trips to the same save.
 		let reloaded = world.loadEntity({ ...config, ...savedConfig });
 		expect(reloaded.save()).toEqual(savedConfig);
 		expect(reloaded.components.entity.isStatic).toEqual(true);
@@ -60,18 +55,15 @@ describe('entity', () => {
 		});
 		let world = createTestWorld(factory);
 
-		// The caller supplies only the type + runtime health; maxHealth/speed come from the goblin template.
 		let entity = world.loadEntity({ type: 'goblin', health: 10 });
 		expect(entity.components.entity.type).toEqual('goblin');
 		expect(entity.components.health?.maxHealth).toEqual(20);
 		expect(entity.components.health?.health).toEqual(10);
 		expect(entity.components.movement?.speed).toEqual(5);
 
-		// The templated maxHealth/speed are not saved - only the type and the entity's serialization.
 		let saved = entity.save();
 		expect(saved).toEqual({ type: 'goblin', health: 10 });
 
-		// That save re-expands through the factory to the same entity when reloaded.
 		let reloaded = world.loadEntity(saved);
 		expect(reloaded.components.health?.maxHealth).toEqual(20);
 		expect(reloaded.components.movement?.speed).toEqual(5);
@@ -116,7 +108,6 @@ describe('entity', () => {
 		expect(fromConfig.components.entity.dead).toEqual(false);
 		expect(fromConfig.components.entity.isStatic).toEqual(false);
 
-		// A bare entity constructed with no config still has one.
 		let bare = new BaseEntity(world);
 		expect(bare.components.entity).toBeDefined();
 	});
@@ -127,7 +118,7 @@ describe('entity', () => {
 
 		expect(entity.components.entity.dead).toEqual(true);
 		expect(entity.components.entity.isStatic).toEqual(true);
-		// Reading straight from the shared block proves the flags live there (1 === true).
+		// Read straight from the shared block to prove the flags live there.
 		let block = world.registry.entity.memoryComponent.getBlock(entity.components.entity.index);
 		expect(block[0]).toEqual(1);
 		expect(block[1]).toEqual(1);
@@ -138,7 +129,6 @@ describe('entity', () => {
 
 	it('killEntity flags the entity dead and emits death', () => {
 		let world = createTestWorld();
-		// Not added to the world, so nothing auto-removes it and the dead flag can be read afterwards.
 		let entity = new BaseEntity(world);
 
 		let died = false;

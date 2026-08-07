@@ -3,8 +3,8 @@ import { PerformanceTiming, System } from '../index';
 import type { PerformanceStats } from '../index';
 import { createTestWorld, type Components, type TestWorld } from './fixtures/components';
 
-// Every timing in here is taken from performance.now(), so the clock is driven by hand: each call returns the
-// next entry in `clock`, which lets a test say exactly how long an update or an event dispatch "took".
+// performance.now() is driven by hand: each call shifts the next entry off `clock`, so a test can dictate
+// exactly how long an update or dispatch "took".
 let clock: Array<number> = [];
 beforeEach(() => {
 	clock = [];
@@ -21,7 +21,6 @@ describe('performance timing', () => {
 		let snapshots: Array<PerformanceStats> = [];
 		timing.on('stats-updated', (stats: PerformanceStats) => snapshots.push(stats));
 
-		// Three 400 tick updates costing 2ms, 6ms and 4ms.  The window only closes on the third.
 		clock = [0, 2, 0, 6, 0, 4];
 		world.update(400);
 		expect(snapshots.length).toEqual(0);
@@ -77,8 +76,6 @@ describe('performance timing', () => {
 		world.addSystem(new NoopSystem(world, 'second'));
 		let timing = new PerformanceTiming(world, { ticksBetweenUpdates: 100 });
 
-		// The world's update itself costs nothing here; the two systems report a run of 3ms / 5ms whose events
-		// then cost 1ms / 4ms on this thread.
 		clock = [0, 0];
 		emitRun(world, 'first', 3, 1);
 		emitRun(world, 'second', 5, 4);
@@ -113,8 +110,7 @@ describe('performance timing', () => {
 		emitRun(world, 'second', 1, 5);
 		world.update(100);
 
-		// Summed from the per-system figures rather than sampled per frame: avg 4 + avg 4, min 2 + min 3, max 6 +
-		// max 5, and every sample that went into either.
+		// Summed from per-system figures, not sampled per frame.
 		expect(timing.stats.events).toEqual({ avg: 8, min: 5, max: 11, samples: 4 });
 	});
 
@@ -147,7 +143,7 @@ describe('performance timing', () => {
 
 		world.removeSystem('late');
 		clock = [0, 0];
-		// Nothing is listening for this system any more, so its report is dropped rather than piling up forever.
+		// Untracked now, so its report is dropped.
 		emitRun(world, 'late', 9, 9);
 		world.update(100);
 		expect(timing.stats.systems).toEqual([]);
@@ -177,7 +173,6 @@ describe('performance timing', () => {
 
 		clock = [0, 9];
 		world.update(100);
-		// Without the reset the first update would have closed this window; instead it starts over.
 		expect(timing.stats.update.samples).toEqual(0);
 
 		clock = [0, 11];
@@ -186,8 +181,8 @@ describe('performance timing', () => {
 	});
 });
 
-// Fakes one worker run of `name`: a run the worker says took `runTime`, whose events then take `eventTime` on
-// this thread.  These are exactly the events ComponentSystem emits either side of dispatching a run's results.
+// Fakes one worker run of `name` (taking `runTime`) whose events then take `eventTime`, via the same events
+// ComponentSystem emits around a dispatch.
 function emitRun(world: TestWorld, name: string, runTime: number, eventTime: number) {
 	clock.unshift(0, eventTime);
 	world.emit(`system-${name}-worker-finished`, runTime);

@@ -4,23 +4,19 @@ import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 import { applyQueryDelta } from './apply-query-delta';
 
-// The slice of the Web Worker global scope createComponentWorker actually touches.  Worker files pass the
-// real `self` (e.g. `createComponentWorker(self, fn)`); passing it explicitly also lets test runners that
-// inject `self` as a module local rather than a true global - like @vitest/web-worker - drive the worker.
+// The slice of the worker global scope createComponentWorker touches. Passing `self` explicitly (rather than
+// using the global) lets runners like @vitest/web-worker, which inject `self` as a module local, drive it.
 export interface ComponentWorkerScope {
 	onmessage: ((e: MessageEvent) => void) | null
 	postMessage(message: ComponentWorkerMessage): void
 }
 
-// Entry point a game's worker file calls with its update function.  It wires up `scope.onmessage`,
-// caches component blocks by entity id (so subsequent runs only need the id), and posts results back.
 export default function createComponentWorker<
 	C extends ComponentMap,
 	T extends EntityUpdateComponents<C>,
 	W extends ComponentSystemWorld = ComponentSystemWorld,
 >(scope: ComponentWorkerScope, updateFunction: EntityUpdateFunction<C, T, W>) {
-	// The worker's persistent iteration lists.  The main thread now sends only membership changes, so these are
-	// carried across runs and mutated by the deltas each run brings (see applyQueryDelta).
+	// Persistent lists, carried across runs and mutated by each run's delta (see applyQueryDelta).
 	let entities: Array<UpdateEntityConfigObject<T>> = [];
 	const queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
 
@@ -62,8 +58,6 @@ export default function createComponentWorker<
 					});
 				},
 				emitSystemEvent(event: string, entityId: number) {
-					// The list per event name is only made the first time that event comes up in a run, so a system
-					// that has an event it rarely reports does not pay an empty array for it every run.
 					(systemEvents[event] ?? (systemEvents[event] = [])).push(entityId);
 				},
 				entityDied(entityId: number) {
@@ -85,8 +79,6 @@ export default function createComponentWorker<
 				updateFunction(message.world, entity.entityId, entity.components, queries, callbacks);
 			});
 
-			// applyQueryDelta already dropped the removed entities from the persistent lists above; the hook just
-			// lets the update function react to entities that left the system's main query.
 			if(updateFunction.entityRemoved) {
 				message.entities.removed.forEach(entityId => {
 					updateFunction.entityRemoved!(message.world, entityId, callbacks);

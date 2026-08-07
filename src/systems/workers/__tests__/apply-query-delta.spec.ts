@@ -1,8 +1,6 @@
 import { applyQueryDelta } from '../apply-query-delta';
 import type { UpdateEntityConfigObject } from '../../component-system';
 
-// The worker-side half of the delta protocol: given a persistent list and the changes a run carries, produce the
-// updated list.  Kept a pure function so both worker backends share it and it can be unit-tested directly.
 type Entry = UpdateEntityConfigObject<{ health: Int32Array }>;
 function entry(entityId: number): Entry {
 	return { entityId, components: { health: new Int32Array([entityId]) } };

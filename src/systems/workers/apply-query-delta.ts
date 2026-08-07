@@ -1,13 +1,8 @@
 import type { EntityUpdateComponents, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 
-// A worker keeps one persistent list per query and applies the delta each run carries: drop the entities that
-// left, then upsert the ones that joined (or whose component blocks changed).  Because the main thread only
-// sends changes, a steady-state run - where membership is unchanged - carries empty arrays and this returns the
-// existing list untouched with no allocation, which is the whole point of the delta protocol: we stop
-// re-transmitting (and re-cloning) every entity id every single frame.
-//
-// The list is returned (rather than mutated in place) because removals rebuild it via filter; callers must store
-// the returned reference back as their persistent list.
+// Applies a run's delta to a query's persistent list: drop the entities that left, upsert those that joined or
+// changed. A steady-state run carries empty arrays and returns the list untouched. Returns the list (removals
+// rebuild it via filter), so callers must store the returned reference back.
 export function applyQueryDelta<T extends EntityUpdateComponents>(
 	list: Array<UpdateEntityConfigObject<T>>,
 	delta: QueryDelta<T>,
@@ -18,8 +13,7 @@ export function applyQueryDelta<T extends EntityUpdateComponents>(
 	}
 
 	if(delta.added.length) {
-		// Map existing members so a re-added entity (its component set changed) replaces its entry in place
-		// instead of being duplicated; genuinely new entities are appended.
+		// Index existing members so a re-added entity replaces its entry in place instead of duplicating.
 		const indexByEid = new Map<number, number>();
 		list.forEach((entry, index) => indexByEid.set(entry.entityId, index));
 

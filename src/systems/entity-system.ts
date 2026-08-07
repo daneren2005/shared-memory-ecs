@@ -3,11 +3,8 @@ import type BaseEntity from '../entity';
 import type { ComponentDefinitionMap, ComponentMap } from '../component-definition';
 import IterableSystem, { type IterableSystemConfig } from './iterable-system';
 
-// Iterates the entities that own a given set of components on the main thread.  Entities are added
-// and removed automatically as the world emits entity-added / entity-removed / component changes.
+// Iterates the entities owning a given set of components on the main thread; membership tracks world events.
 export default abstract class EntitySystem<C extends ComponentMap, T extends BaseEntity<C> = BaseEntity<C>> extends IterableSystem<C, T> {
-	// Keyed by eid so an entity leaving the world costs a constant-time delete here rather than a scan of the
-	// whole membership - see BaseWorld#entities.
 	entities: Map<number, T> = new Map();
 	options: EntitySystemConfig<C>;
 
@@ -37,8 +34,6 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 	}
 
 	getIterables(): Array<T> {
-		// An array because IterableSystem spreads one pass over several frames, so it needs a list it can hold a
-		// position in while the membership underneath it changes.
 		const iterables: Array<T> = [];
 		this.entities.forEach(entity => {
 			if(!entity.components.entity.dead) {

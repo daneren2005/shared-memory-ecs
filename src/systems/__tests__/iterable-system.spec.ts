@@ -75,7 +75,7 @@ describe('iterable-system', () => {
 		expect(system.iterables.map(i => i.age)).toEqual([200, 200, 200, 200, 200, 200, 0]);
 		system.update(100);
 		expect(system.iterables.map(i => i.age)).toEqual([200, 200, 200, 200, 200, 200, 200]);
-		// Make sure when we restart we kept track of the fact that we missed multiple starts!
+		// On restart it must account for the multiple missed starts.
 		system.update(100);
 		expect(system.iterables.map(i => i.age)).toEqual([600, 600, 200, 200, 200, 200, 200]);
 	});

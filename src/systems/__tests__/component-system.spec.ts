@@ -7,19 +7,15 @@ import { killUpdate, KILLED_ENTITIES_EVENT } from '../../__tests__/fixtures/kill
 import { spawnUpdate } from '../../__tests__/fixtures/spawn-update';
 import { queryTargetUpdate } from '../../__tests__/fixtures/query-target-update';
 
-// Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.  The noop worker backs
-// the membership tests (which never call run()); the damage worker backs the run() flow tests; the kill
-// worker backs the death tests; the spawn worker backs the creation tests; the query-target worker backs
-// the sub-query event-routing tests.
+// Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.
 const NOOP_WORKER_URL = new URL('../../__tests__/fixtures/noop.worker.ts', import.meta.url);
 const DAMAGE_WORKER_URL = new URL('../../__tests__/fixtures/damage.worker.ts', import.meta.url);
 const KILL_WORKER_URL = new URL('../../__tests__/fixtures/kill.worker.ts', import.meta.url);
 const SPAWN_WORKER_URL = new URL('../../__tests__/fixtures/spawn.worker.ts', import.meta.url);
 const QUERY_TARGET_WORKER_URL = new URL('../../__tests__/fixtures/query-target.worker.ts', import.meta.url);
 
-// Every test runs against both backends: 'main-thread' uses the in-process ComponentWebWorker
-// (forceMainThread), 'worker' uses a real worker module driven through createComponentWorker.  Both must
-// produce identical observable behavior.
+// Every test runs against both backends: 'main-thread' (ComponentWebWorker) and 'worker' (a real worker
+// module). Both must produce identical observable behavior.
 type Mode = 'main-thread' | 'worker';
 const MODES: Array<Mode> = ['main-thread', 'worker'];
 
@@ -29,8 +25,7 @@ interface StubOptions {
 	queries?: { [key: string]: ComponentSystemQuery<Components> }
 }
 
-// Lets a worker-mode run() settle: postMessage to a real worker is async, so we wait a macrotask for the
-// run-complete message to come back.  In main-thread mode the work is synchronous and this is a noop wait.
+// Waits a macrotask for a worker-mode run-complete message; a noop wait in main-thread mode.
 function flush(): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, 0));
 }
@@ -43,14 +38,11 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		systems = [];
 	});
 	afterEach(() => {
-		// Terminate any real workers spun up during the test.
 		systems.forEach(system => system.destroy());
 	});
 
-	// Registers the system with the world and tracks it for teardown.  Bounded on the non-generic `System` base
-	// rather than `ComponentSystem<Components>` so it accepts systems that narrow the component arrays type `T`
-	// (e.g. DamageSystem's `{ health: Int32Array }`): `T` is invariant on ComponentSystem, so such systems
-	// aren't assignable to the wide default, but they are all still plain `System<Components>`.
+	// Bounded on the non-generic `System` base so it accepts systems that narrow `T` (invariant on
+	// ComponentSystem), which aren't assignable to the wide default.
 	function useSystem<S extends System<Components>>(system: S): S {
 		systems.push(system);
 		world.addSystem(system);
@@ -179,9 +171,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		expect(system.getQueryEntityEids('noMovement')).toEqual([staticEntity.eid]);
 	});
 
-	// The delta protocol: run() sends only what changed since the last run rather than the full entity set, so
-	// the worker keeps its own persistent lists.  These assert the main-thread bookkeeping that produces those
-	// deltas; applyQueryDelta covers the worker side that consumes them.
+	// The main-thread bookkeeping that produces each run's delta; applyQueryDelta covers the worker side.
 	describe('membership delta', () => {
 		it('queues a newly matched entity as an add until the next run flushes it', () => {
 			let system = useSystem(new StubSystem(world, mode, { required: ['health'] }));
@@ -191,7 +181,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 			system.run(0);
 
-			// run() flushed the delta to the worker, so nothing is left pending.
 			expect(system.getPendingDelta()).toEqual({ added: [], removed: [] });
 		});
 
@@ -199,7 +188,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			let system = useSystem(new StubSystem(world, mode, { required: ['health'] }));
 
 			let entity = createEntity({ maxHealth: 100 });
-			// Flush the add first so the worker actually knows about the entity.
 			system.run(0);
 
 			world.removeEntity(entity);
@@ -211,7 +199,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			let system = useSystem(new StubSystem(world, mode, { required: ['health'] }));
 
 			let entity = createEntity({ maxHealth: 100 });
-			// The worker never learned about it, so removing before a run leaves nothing to transmit.
 			world.removeEntity(entity);
 
 			expect(system.getPendingDelta()).toEqual({ added: [], removed: [] });
@@ -230,8 +217,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			let entity = createEntity({ maxHealth: 100 });
 			system.run(0);
 
-			// A relevant component is added: the entity stays in the main query but joins the sub-query, and its
-			// block set changed - so both queries re-send it rather than leaving the worker with stale blocks.
 			entity.loadComponent('movement', { speed: 100 });
 
 			expect(system.getPendingDelta().added).toEqual([entity.eid]);
@@ -239,9 +224,8 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		});
 	});
 
-	// These drive the actual update pipeline - the part that genuinely differs between the two backends
-	// (ComponentWebWorker passes components straight through; the real worker caches them by entity id and
-	// only receives the id on later runs).  Both must reach identical results.
+	// The update pipeline, where the backends genuinely differ (the real worker caches blocks by id and gets
+	// only the id on later runs). Both must reach identical results.
 	describe('run', () => {
 		it('runs the update, mutating shared memory and emitting events', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
@@ -260,8 +244,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(events).toEqual([99]);
 		});
 
-		// An update function can name an event of its own and hand it whatever args it needs, so a system that
-		// would otherwise report several properties one at a time can report them together in one event.
 		it('emits an update function\'s own event on the entity with its args', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
 			await system.init();
@@ -278,9 +260,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(damaged).toEqual([[1, 99]]);
 		});
 
-		// PerformanceTiming is driven entirely off these two events, so both backends have to report a run: a
-		// forceMainThread system costs the calling thread more than a worker one, not less, and reporting
-		// nothing left it reading as free.
+		// PerformanceTiming is driven off these two events, so both backends must report a run.
 		it('reports the run to the world either side of dispatching its events', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
 			await system.init();
@@ -300,7 +280,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 			expect(calls).toEqual(['run-finished', 'events', 'events-finished']);
 			expect(runTimes.length).toEqual(1);
-			// The fallback times itself the same way the real worker does, so neither reports a hardcoded zero.
 			expect(runTimes[0]).toBeGreaterThanOrEqual(0);
 		});
 
@@ -315,14 +294,11 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			system.run(16);
 			await flush();
 
-			// In worker mode the second run only sends the entity id and relies on the worker's cached
-			// shared-memory block, so a correct result here proves that caching path works.
+			// In worker mode the second run sends only the id, so this proves the cached-block path works.
 			expect(entity.components.health?.health).toEqual(98);
 		});
 
-		// With the delta protocol the worker keeps its own persistent list; removing an entity sends a remove
-		// delta rather than simply omitting it from a full resend, so the surviving entities must keep updating
-		// correctly across the removal.
+		// A removal sends a remove delta, so survivors must keep updating correctly across it.
 		it('keeps updating the remaining entities after one is removed', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
 			await system.init();
@@ -335,7 +311,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(survivor.components.health?.health).toEqual(99);
 			expect(leaving.components.health?.health).toEqual(99);
 
-			// Queues a remove delta for `leaving`; the worker drops it from its persistent list on the next run.
 			world.removeEntity(leaving);
 
 			let survivorEvents = 0;
@@ -346,7 +321,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			system.run(16);
 			await flush();
 
-			// The survivor was still in the worker's list and got damaged again (exactly once this run).
 			expect(survivor.components.health?.health).toEqual(98);
 			expect(survivorEvents).toEqual(1);
 			expect(system.isEntityInSystem(leaving)).toEqual(false);
@@ -389,7 +363,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			system.run(16);
 			await flush();
 
-			// The worker flagged it dead in shared memory and reported the death back, so the world removed it.
 			expect(world.entities.has(entity.eid)).toEqual(false);
 			expect(system.isEntityInSystem(entity)).toEqual(false);
 		});
@@ -404,27 +377,23 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			system.run(16);
 			await flush();
 
-			// The worker can't create the entity itself, so it asked the main thread to; loadEntity ran on
-			// run-complete, leaving the original entity plus the one it spawned.
 			expect(world.entities.size).toEqual(2);
 			let spawned = listOf(world.entities).find(other => other !== entity);
 			expect(spawned?.components.health?.maxHealth).toEqual(10);
 			expect(spawned?.components.health?.health).toEqual(10);
 
-			// The spawned entity only exists after the run, so the system that requested it picks it up on the
-			// next run rather than the one that created it.
+			// It exists only after the run, so the system picks it up next run.
 			expect(system.isEntityInSystem(spawned!)).toEqual(true);
 		});
 
-		// Regression: events for entities the system only knows through a sub-query (never its main query)
-		// must still route back to the entity.  These entities are absent from the main query component cache,
-		// so routing them relies on the world's getEntityByEid fallback.
+		// Regression: events for sub-query-only entities (absent from the main-query cache) must still route back
+		// via the world's getEntityByEid fallback.
 		it('routes a death event to an entity only present in a sub-query', async () => {
 			let system = useSystem(new QueryTargetSystem(world, mode));
 			await system.init();
 
-			// The killer is the only main-query (movement) entity; the target has health but no movement, so it
-			// lives in the `targets` sub-query and is never part of the system's main query.
+			// The killer is the only movement (main-query) entity; the target is health-only, so it lives in the
+			// `targets` sub-query.
 			createEntity({ speed: 100 });
 			let target = createEntity({ maxHealth: 100 });
 			expect(system.isEntityInSystem(target)).toEqual(false);
@@ -438,7 +407,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			await flush();
 
 			expect(died).toEqual(true);
-			// The death event ran the world's cleanup, removing the sub-query-only entity.
 			expect(world.entities.has(target.eid)).toEqual(false);
 		});
 
@@ -461,8 +429,8 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(events).toEqual([50]);
 		});
 
-		// The other half of the event story: an update that reports the same thing about most of its entities
-		// every run names it once and hands over ids, and the whole run arrives as one call on the system.
+		// An update that reports the same thing about most of its entities names it once and hands over ids; the
+		// whole run arrives as one call on the system.
 		describe('system events', () => {
 			it('emits one event on the system carrying every entity id it happened to', async () => {
 				let system = useSystem(new DamageSystem(world, mode));
@@ -479,9 +447,8 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 				system.run(16);
 				await flush();
 
-				// One call for the run, not one per entity.
 				expect(batches).toEqual([[first.eid, second.eid]]);
-				// Nothing travelled with the ids, because the values are already there in shared memory.
+				// Nothing travelled with the ids; the values are already in shared memory.
 				expect(first.components.health?.health).toEqual(99);
 				expect(second.components.health?.health).toEqual(99);
 			});
@@ -490,7 +457,6 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 				let system = useSystem(new DamageSystem(world, mode));
 				await system.init();
 
-				// Nothing this system runs over, so its update never reports anything.
 				createEntity({ speed: 100 });
 
 				let called = 0;
@@ -523,9 +489,8 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 				expect(batches).toEqual([[entity.eid], [entity.eid]]);
 			});
 
-			// System events are dispatched ahead of the per-entity ones, so a listener can still resolve an entity
-			// the same run went on to kill - `death` is a per-entity event, and handling it takes the entity out of
-			// the world.
+			// System events dispatch ahead of per-entity ones, so a listener can still resolve an entity the same
+			// run's `death` (a per-entity event) goes on to remove.
 			it('emits before the per-entity events of the same run', async () => {
 				let system = useSystem(new KillSystem(world, mode));
 				await system.init();
@@ -565,8 +530,7 @@ class StubSystem extends ComponentSystem<Components, {}> {
 		return list ? eidsOf(list) : [];
 	}
 
-	// The pending membership delta the next run() will flush to the worker, resolved to eids for assertions.
-	// Defaults to the main query (its internal key is '___main').
+	// The next run()'s pending delta, resolved to eids. Defaults to the main query (internal key '___main').
 	getPendingDelta(queryName = '___main'): { added: Array<number>, removed: Array<number> } {
 		const deltas = Reflect.get(this, 'queryDeltas') as { [key: string]: { added: Set<BaseEntity<Components>>, removed: Set<number> } };
 		const delta = deltas[queryName];
@@ -602,7 +566,7 @@ class KillSystem extends ComponentSystem<Components, { health: Int32Array, entit
 		super(world, {
 			name: 'KillSystem',
 			required: ['health'],
-			// The entity component is pulled into the query so killEntityWorker can reach its shared block.
+			// entity is pulled in so killEntityWorker can reach its block.
 			optional: ['entity'],
 			updateFunction: killUpdate,
 			forceMainThread: mode === 'main-thread',
@@ -626,14 +590,13 @@ class SpawnSystem extends ComponentSystem<Components, { health: Int32Array }> {
 class QueryTargetSystem extends ComponentSystem<Components, { movement: Float32Array }> {
 	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
-			// Main query is movement-only, so health entities acted on below are never part of it.
 			name: 'QueryTargetSystem',
 			required: ['movement'],
 			updateFunction: queryTargetUpdate,
 			forceMainThread: mode === 'main-thread',
 			getWorker: () => new Worker(QUERY_TARGET_WORKER_URL, { type: 'module' }),
 			queries: {
-				// The entity component is pulled in so killEntityWorker can reach the target's shared block.
+				// entity is pulled in so killEntityWorker can reach the target's block.
 				targets: {
 					required: ['health'],
 					not: ['movement'],

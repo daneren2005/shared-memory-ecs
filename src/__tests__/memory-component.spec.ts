@@ -31,7 +31,7 @@ describe('memory component', () => {
 
 		component.delete(0);
 		expect([...component.getBlock(2)]).toEqual([3, 3]);
-		// If we stop having stable memory locations we have to stop using cached data views in components!
+		// Components cache data views, so block memory locations must stay stable across deletes.
 		expect(component.getBlock(2).byteOffset).toEqual(startDataBlock.byteOffset);
 	});
 

@@ -18,8 +18,7 @@ describe('entity-system', () => {
 		createEntity({ speed: 100 });
 		expect(eidsOf(system.entities)).toEqual([entity1.eid, entity2.eid]);
 
-		// Reloading the saved entities into a fresh world reproduces the same membership.  save carries only
-		// serialization, so reload layers it over each entity's defining config (its template).
+		// Reloading the saves into a fresh world reproduces the same membership.
 		let saves = listOf(world.entities).map(e => ({ ...e.config, ...e.save() }));
 		let newWorld = createTestWorld();
 		let newSystem = new StubSystem(newWorld, ['health']);
@@ -37,7 +36,6 @@ describe('entity-system', () => {
 		createEntity({ speed: 100 });
 		expect(eidsOf(system.entities)).toEqual([entity1.eid]);
 
-		// save carries only serialization, so reload layers it over each entity's defining config.
 		let saves = listOf(world.entities).map(e => ({ ...e.config, ...e.save() }));
 		let newWorld = createTestWorld();
 		let newSystem = new StubSystem(newWorld, ['health', 'movement']);

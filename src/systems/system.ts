@@ -2,13 +2,7 @@ import { EventEmitter } from 'eventemitter3';
 import type BaseWorld from '../world';
 import type { ComponentDefinitionMap, ComponentMap } from '../component-definition';
 
-// Base system: runs on an optional fixed timestep (deltaBetweenRuns) and is driven by BaseWorld#update.
-// Systems only care about the component map `C`, not the World's registry (`R`) or config (`Cfg`), so they
-// reference the World through the widened `ComponentDefinitionMap` and let `Cfg` default.
-//
-// A system is an EventEmitter so it can report a whole run's worth of something in one go - see
-// ComponentSystem's system events, where an update function names an event and the entity ids it happened to
-// and the main thread gets one call with the lot rather than one per entity.
+// Base system: runs on an optional fixed timestep (deltaBetweenRuns), driven by BaseWorld#update.
 export default abstract class System<C extends ComponentMap = ComponentMap> extends EventEmitter {
 	world: BaseWorld<ComponentDefinitionMap, C>;
 	name: string;
@@ -39,10 +33,7 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 		if(this.currentDelta >= this.deltaBetweenRuns || this.firstRun) {
 			let leftOverDelta = 0;
 			if(this.deltaBetweenRuns > 0) {
-				// Without this if we take 100ms to run (ie: IterableSystem across multiple frames) then we will end up
-				// actually running this in 300ms total instead of again in 100ms for a total of 200ms
-				// With firstRun this ends up calling run(0) the first time - this makes it so things like events are
-				// will trigger on the second instead of triggering a 1 second timer at 1.0166 seconds
+				// Carry the remainder so a run that overshoots its timestep doesn't drift the next one later.
 				leftOverDelta = this.currentDelta % this.deltaBetweenRuns;
 			}
 
@@ -69,6 +60,5 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 export interface SystemConfig {
 	name: string
 	deltaBetweenRuns?: number
-	// Defaults to false
 	firstRun?: boolean
 }

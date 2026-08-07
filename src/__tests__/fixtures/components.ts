@@ -8,8 +8,6 @@ export interface HealthComponent {
 	health: number
 	maxHealth: number
 }
-// `maxHealth` is the defining Config prop; `health` is optional, runtime-derived Serialization that is the
-// only thing `save` persists.
 export interface HealthConfig {
 	maxHealth: number
 }
@@ -21,7 +19,6 @@ const HEALTH_MAX_INDEX = 1;
 export const healthDefinition: ComponentDefinition<HealthComponent, Int32Array, HealthConfig, HealthSerialization> = {
 	type: Int32Array,
 	size: 2,
-	// `maxHealth` is what defines a health component; a bare `health` in the config does not trigger a load.
 	loadProperties: ['maxHealth'],
 	load(entity, memory, config) {
 		const index = memory.create([config.health ?? config.maxHealth, config.maxHealth]);
@@ -44,7 +41,7 @@ export const healthDefinition: ComponentDefinition<HealthComponent, Int32Array, 
 		};
 	},
 	save(component) {
-		// maxHealth is Config, so it is not serialized; only persist current health when it differs from full.
+		// Only persist current health when it differs from full; maxHealth is Config.
 		const config: HealthSerialization = {};
 		if(component.health !== component.maxHealth) {
 			config.health = component.health;
@@ -58,8 +55,7 @@ export interface MovementComponent {
 	index: number
 	speed: number
 }
-// `speed` is entirely Config (it comes from the type template, like health's maxHealth), so movement has no
-// runtime serialization and defines no `save` - nothing about it needs persisting on the entity.
+// `speed` is entirely Config, so movement has no serialization and defines no `save`.
 export const movementDefinition: ComponentDefinition<MovementComponent, Float32Array, { speed: number }> = {
 	type: Float32Array,
 	size: 1,
@@ -80,10 +76,8 @@ export const movementDefinition: ComponentDefinition<MovementComponent, Float32A
 	},
 };
 
-// A deferred component (loadInFinishLoading) that mirrors the lumbermill/trees use case: it records how many
-// OTHER entities exist in the world.  Because it reads the rest of the world, its count is only correct once
-// every entity in a load batch exists - which is exactly why loading it is deferred to finishLoading rather
-// than running as each entity is created.
+// A deferred (loadInFinishLoading) component that counts the OTHER entities in the world, correct only once
+// the whole load batch exists — hence deferred to finishLoading.
 export interface NeighborsComponent {
 	index: number
 	count: number
@@ -95,10 +89,8 @@ export const neighborsDefinition: ComponentDefinition<NeighborsComponent, Int32A
 	type: Int32Array,
 	size: 1,
 	loadProperties: ['countsNeighbors'],
-	// Wait for finishLoading so every other entity is already loaded before we count them.
 	loadInFinishLoading: true,
 	load(entity, memory) {
-		// Everything else in the world, so it is one less than the world holds once this entity is in it.
 		const count = entity.world.entities.has(entity.eid) ? entity.world.entities.size - 1 : entity.world.entities.size;
 		const index = memory.create([count]);
 		const block = memory.getBlock(index);
@@ -121,9 +113,6 @@ export const registry = {
 	neighbors: neighborsDefinition,
 };
 
-// The component-instance map and flat entity config both derive straight from the registry, so tests get a
-// fully typed world (and `entity.config`) without hand-writing any composite type.  `ComponentsOf` adds the
-// always-present entity component automatically.
 export type Components = ComponentsOf<typeof registry>;
 export type ComponentArrays = {
 	[K in keyof typeof registry]: InstanceType<(typeof registry)[K]['type']>

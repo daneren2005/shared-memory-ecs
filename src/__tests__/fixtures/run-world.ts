@@ -1,12 +1,10 @@
 import type { BaseWorld } from '../../index';
 import type { ComponentDefinitionMap, ComponentMap } from '../../index';
 
-// STEP_SIZE mirrors the game's fixed timestep so the timing based system tests behave identically.
+// Mirrors the game's fixed timestep so timing-based system tests behave identically.
 export const STEP_SIZE = 16.66;
 
-// Steps the world forward in fixed increments, the same way the real game loop drives it.  Generic over the
-// registry `R` and component map `C` so any typed world can be driven; only `update` is used, which is
-// registry-agnostic.
+// Steps the world forward in fixed increments, like the real game loop.
 export function runWorld<R extends ComponentDefinitionMap, C extends ComponentMap>(world: BaseWorld<R, C>, totalTime: number = STEP_SIZE) {
 	let steps = Math.ceil(totalTime / STEP_SIZE);
 	for(let i = 0; i < steps; i++) {
