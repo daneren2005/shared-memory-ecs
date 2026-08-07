@@ -1,5 +1,9 @@
 # Agent Instructions
 
+For a fast map of the codebase (files, core data flow, conventions), read @docs/ARCHITECTURE.md before exploring the tree.
+
+- When you make an architectural change (new/removed/renamed module, changed data flow, new public export, changed core convention), update docs/ARCHITECTURE.md — and the README when the public/usage surface changes — in the same change so the documentation is always up to date.
+- Keep comments concise and rare. Only comment non-obvious things: a hidden gotcha, an invariant, or the reason code must work a certain way. Never restate what the code already says, and don't narrate what a function does when its name and body make it clear. Prefer one short line over a paragraph.
 - Never cast types to `any`
 - Always check there are no lint or type errors after editing a file
 - Do not ever use @ts-nocheck
