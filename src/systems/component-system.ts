@@ -100,7 +100,7 @@ export default abstract class ComponentSystem<
 					// entity was never part of this system's main query cache.
 					const entity = this.world.getEntityByEid(event.entityId);
 					if(!entity) {
-						console.warn(`Could not find entity with id ${event.entityId}`);
+						console.warn(`${this.name}-event ${event.event}: Could not find entity with id ${event.entityId}`);
 						return;
 					}
 
