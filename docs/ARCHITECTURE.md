@@ -41,10 +41,10 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
 
 | File | Responsibility |
 | --- | --- |
-| `system.ts` | `System<C>` abstract base: fixed-timestep `deltaBetweenRuns`, `update`→`run`, `shouldRun`, `firstRun`. EventEmitter (systems report a whole run in one emit). |
+| `system.ts` | `System<C>` abstract base: fixed-timestep `deltaBetweenRuns`, `update`→`run`, `shouldRun`, `firstRun`, plus the overridable `init`/`finishLoading` startup pair. EventEmitter (systems report a whole run in one emit). |
 | `iterable-system.ts` | `IterableSystem<C,T>`: spreads one pass over multiple frames when it exceeds `maxMsPerFrame` (`iterationsPerCheck`, `getIterables`/`updateIterable`). |
 | `entity-system.ts` | `EntitySystem<C,T>`: main-thread iteration over entities owning `options.components`; auto add/remove via world events; `entities` Map by eid; `filterEntity` skips static. |
-| `component-system.ts` | `ComponentSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks. The largest / most involved file. |
+| `component-system.ts` | `ComponentSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks, and the update-function hooks (`init`/`preRun`/`entityRemoved`). The largest / most involved file. |
 
 ### Workers (`src/systems/workers/`) and actions (`src/actions/`)
 
@@ -69,6 +69,15 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   `{ entities: Cfg[], gameTime?, playerTime?, timeScale? }`.
 - **Update:** `world.update(dt)` → `update-started` → per system `shouldRun`/`update`
   (timeScale-scaled, skipped while paused) → `update-finished`.
+- **System startup (two phases):** `system.init()` resolves once the worker is up — `ComponentSystem` posts
+  `init` in its constructor and the worker answers `init-complete`. `system.finishLoading()` then posts `load`
+  carrying `getInitData()`'s result; the worker runs `updateFunction.init` and answers `loaded`. `world.init()`
+  awaits both in order, and `world.load()` re-runs `finishLoading` so a reused world re-seeds its workers.
+- **Worker update-function hooks:** besides the per-entity body, an `updateFunction` may carry `init`,
+  `preRun`, and `entityRemoved`. `init(data)` runs on every `finishLoading` — `data` comes from the
+  system's `getInitData()` (typed via the `D` param) — and its returned `Partial<W>` is merged onto `world`
+  every run, so worker-local state (seeded RNG, lookup tables) persists without re-sending. `preRun` runs
+  once per run before the entity pass; `entityRemoved` runs once per entity that left the system this run.
 - **Worker report-back:** update functions write shared memory directly; anything needing
   the main thread goes through `callbacks` — `entityComponentChanged` (`component-property-updated`),
   `entityDied` (`death`), `createEntity`, plus `emitEntityEvent` (per-entity, arbitrary

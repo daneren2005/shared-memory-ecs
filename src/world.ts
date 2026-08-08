@@ -72,6 +72,9 @@ export default class BaseWorld<
 	async init() {
 		await Promise.all(this.systems.map(system => system.init()).filter(promise => promise instanceof Promise));
 	}
+	private finishLoadingSystems() {
+		return Promise.all(this.systems.map(system => system.finishLoading()).filter(promise => promise instanceof Promise));
+	}
 
 	addEntity(entity: BaseEntity<C, Cfg>, created = true): BaseEntity<C, Cfg> {
 		this.entities.set(entity.eid, entity);
@@ -118,6 +121,9 @@ export default class BaseWorld<
 		this.gameTime = config.gameTime ?? 0;
 		this.playerTime = config.playerTime ?? 0;
 		this.timeScale = config.timeScale ?? 1;
+
+		// ComponentSystem re-sends its init data here.
+		void this.finishLoadingSystems();
 	}
 	removeEntity(entity: BaseEntity<C, Cfg>) {
 		// delete reports whether it was actually present, so a double-remove emits entity-removed only once.

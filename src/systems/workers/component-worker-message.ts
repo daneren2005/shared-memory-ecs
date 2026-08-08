@@ -4,6 +4,16 @@ interface InitMessage {
 	type: 'init'
 }
 
+interface InitCompleteMessage {
+	type: 'init-complete'
+}
+
+// Sent on every (re)load: carries the system's init data and runs updateFunction.init.
+interface LoadMessage<D = unknown> {
+	type: 'load'
+	data?: D
+}
+
 interface LoadedMessage {
 	type: 'loaded'
 }
@@ -35,5 +45,6 @@ interface EntityEventsMessage {
 	created: Array<Record<string, unknown>>
 }
 
-type ComponentWorkerMessage<W extends ComponentSystemWorld = ComponentSystemWorld> = InitMessage | LoadedMessage | RunUpdateMessage<W> | EntityEventsMessage;
+type ComponentWorkerMessage<W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> =
+	InitMessage | InitCompleteMessage | LoadMessage<D> | LoadedMessage | RunUpdateMessage<W> | EntityEventsMessage;
 export default ComponentWorkerMessage;

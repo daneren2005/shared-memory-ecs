@@ -190,6 +190,67 @@ class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, D
 }
 ```
 
+### Update-function hooks: `init` and `preRun`
+
+`addDataToWorld` runs on the main thread and re-sends its data every run. When the data instead needs to
+*live in the worker* — computed once, or too big to ship each frame — attach hooks to the update function
+itself. Both are optional properties on the `EntityUpdateFunction`.
+
+**`init`** runs on `system.finishLoading()` — once at startup (`world.init()` calls it), and again on each
+`world.load()` so a reused world re-seeds its workers. It receives whatever the system's `getInitData()` returned
+(structured-cloned across the boundary) and returns a `Partial<W>` that is merged onto `world` on every
+subsequent run. Use it for state that must be seeded from the main thread but then persist inside the worker
+— a seeded RNG, a lookup table, a config object — without paying to re-send it each frame. Type the init
+data with the `D` type parameter (the fourth on `EntityUpdateFunction` / `ComponentSystem`) so `getInitData`
+and the `init` hook agree on its shape; it defaults to `unknown` when a system has no init data:
+
+```ts
+interface DamageWorld extends ComponentSystemWorld {
+	damage: number
+}
+interface DamageInitData {
+	baseDamage: number
+}
+
+const damageUpdate: EntityUpdateFunction<Components, { health: Int32Array }, DamageWorld, DamageInitData> =
+	(world, entityId, components) => { components.health[0] -= world.damage; };
+
+// Runs once in the worker; its return is merged onto `world` before every run. `data` is typed as
+// `DamageInitData | undefined` (undefined when the system supplies no getInitData).
+damageUpdate.init = (data) => ({ damage: data?.baseDamage ?? 1 });
+
+class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
+	constructor(world: BaseWorld<Components>) {
+		super(world, {
+			name: 'DamageSystem',
+			required: ['health'],
+			updateFunction: damageUpdate,
+			getWorker: () => new Worker(/* your worker entry */),
+			// Runs on the main thread; its result is structured-cloned to the worker's `init`.
+			getInitData: () => ({ baseDamage: 5 }),
+		});
+	}
+}
+```
+
+Unlike `addDataToWorld` (an overridable method on the system), `getInitData` is a config option — it lives in
+the options passed to the `ComponentSystem` constructor, so a system used without a subclass can supply it
+there directly.
+
+**`preRun`** runs once per run, before any entity is updated, with the run's `world`, the full entity list,
+the query results, and the same `callbacks`. Use it for setup that spans the whole batch — seeding a
+spatial index, resetting an accumulator, or emitting a run-level event — that would be wasteful or wrong to
+repeat inside the per-entity loop:
+
+```ts
+damageUpdate.preRun = (world, entities, queries, callbacks) => {
+	// Runs before the per-entity pass; `entities` is everything this run will touch.
+};
+```
+
+(An `entityRemoved(world, entityId, callbacks)` hook completes the set — it fires once per entity that left
+the system this run, so a worker can release any per-entity state it was holding.)
+
 ### Importing in workers
 
 Each worker entry file is bundled on its own, and a single-entry bundle cannot tree-shake this package's

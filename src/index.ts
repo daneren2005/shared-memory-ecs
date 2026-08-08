@@ -48,6 +48,7 @@ export type {
 	EntityUpdateComponents,
 	EntityQueryComponents,
 	EntityUpdateFunction,
+	EntityUpdateInitFunction,
 	EntityUpdatePreRunFunction,
 	EntityRemovedFunction,
 	UpdateEntityConfig,

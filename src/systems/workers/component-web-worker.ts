@@ -6,22 +6,32 @@ import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 
 // Main-thread fallback that runs the update function synchronously, mirroring the real worker's behavior.
-export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> extends WebWorker {
-	private updateFunction: EntityUpdateFunction<C, T, W>;
+export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> extends WebWorker {
+	private updateFunction: EntityUpdateFunction<C, T, W, D>;
 	private entities: Array<UpdateEntityConfigObject<T>> = [];
 	private queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
+	// Mirrors createComponentWorker: updateFunction.init's result, merged onto `world` each run.
+	private worldExtension: Partial<W> | undefined;
 
-	constructor(updateFunction: EntityUpdateFunction<C, T, W>) {
+	constructor(updateFunction: EntityUpdateFunction<C, T, W, D>) {
 		super();
 		this.updateFunction = updateFunction;
 	}
 
-	postMessage(message: ComponentWorkerMessage<W>): void {
+	postMessage(message: ComponentWorkerMessage<W, D>): void {
 		if(message.type === 'init') {
+			this.onMessageTyped({
+				type: 'init-complete',
+			});
+		} else if(message.type === 'load') {
+			this.worldExtension = this.updateFunction.init?.(message.data) ?? undefined;
 			this.onMessageTyped({
 				type: 'loaded',
 			});
 		} else if(message.type === 'run') {
+			if(this.worldExtension) {
+				Object.assign(message.world, this.worldExtension);
+			}
 			// Timed like the real worker so a forceMainThread system reports a real run cost, not zero.
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
@@ -91,7 +101,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 		}
 	}
 
-	onMessageTyped(message: ComponentWorkerMessage<W>) {
+	onMessageTyped(message: ComponentWorkerMessage<W, D>) {
 		this.onmessage({
 			data: message,
 		});

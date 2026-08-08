@@ -15,19 +15,30 @@ export default function createComponentWorker<
 	C extends ComponentMap,
 	T extends EntityUpdateComponents<C>,
 	W extends ComponentSystemWorld = ComponentSystemWorld,
->(scope: ComponentWorkerScope, updateFunction: EntityUpdateFunction<C, T, W>) {
+	D = unknown,
+>(scope: ComponentWorkerScope, updateFunction: EntityUpdateFunction<C, T, W, D>) {
 	// Persistent lists, carried across runs and mutated by each run's delta (see applyQueryDelta).
 	let entities: Array<UpdateEntityConfigObject<T>> = [];
 	const queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
+	// What updateFunction.init returned: persistent state (e.g. a seeded RNG) merged onto `world` each run.
+	let worldExtension: Partial<W> | undefined;
 
 	scope.onmessage = function(e) {
-		const message = e.data as ComponentWorkerMessage<W>;
+		const message = e.data as ComponentWorkerMessage<W, D>;
 
 		if(message.type === 'init') {
+			postMessageTyped(scope, {
+				type: 'init-complete',
+			});
+		} else if(message.type === 'load') {
+			worldExtension = updateFunction.init?.(message.data) ?? undefined;
 			postMessageTyped(scope, {
 				type: 'loaded',
 			});
 		} else if(message.type === 'run') {
+			if(worldExtension) {
+				Object.assign(message.world, worldExtension);
+			}
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
 			let systemEvents: SystemEvents = {};

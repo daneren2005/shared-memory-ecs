@@ -2,7 +2,7 @@ import { ComponentSystem } from '../../index';
 import type { BaseEntity, ComponentSystemQuery, System } from '../../index';
 import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
 import { eidsOf, listOf } from '../../__tests__/fixtures/entity-collections';
-import { damageUpdate, DAMAGED_ENTITIES_EVENT, type DamageWorld } from '../../__tests__/fixtures/damage-update';
+import { damageUpdate, DAMAGED_ENTITIES_EVENT, type DamageWorld, type DamageInitData } from '../../__tests__/fixtures/damage-update';
 import { killUpdate, KILLED_ENTITIES_EVENT } from '../../__tests__/fixtures/kill-update';
 import { spawnUpdate } from '../../__tests__/fixtures/spawn-update';
 import { queryTargetUpdate } from '../../__tests__/fixtures/query-target-update';
@@ -28,6 +28,12 @@ interface StubOptions {
 // Waits a macrotask for a worker-mode run-complete message; a noop wait in main-thread mode.
 function flush(): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+// Mirrors world.init(): boot the worker, then hand it its init data (finishLoading runs updateFunction.init).
+async function initSystem(system: System<Components>): Promise<void> {
+	await system.init();
+	await system.finishLoading();
 }
 
 describe.each(MODES)('component-system (%s)', (mode) => {
@@ -229,7 +235,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 	describe('run', () => {
 		it('runs the update, mutating shared memory and emitting events', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
-			await system.init();
+			await initSystem(system);
 
 			let entity = createEntity({ maxHealth: 100 });
 			let events: Array<number> = [];
@@ -246,7 +252,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 		it('emits an update function\'s own event on the entity with its args', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
-			await system.init();
+			await initSystem(system);
 
 			let entity = createEntity({ maxHealth: 100 });
 			let damaged: Array<Array<number>> = [];
@@ -263,7 +269,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		// PerformanceTiming is driven off these two events, so both backends must report a run.
 		it('reports the run to the world either side of dispatching its events', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
-			await system.init();
+			await initSystem(system);
 
 			let entity = createEntity({ maxHealth: 100 });
 			let calls: Array<string> = [];
@@ -285,7 +291,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 		it('caches components across repeated runs', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
-			await system.init();
+			await initSystem(system);
 
 			let entity = createEntity({ maxHealth: 100 });
 
@@ -301,7 +307,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		// A removal sends a remove delta, so survivors must keep updating correctly across it.
 		it('keeps updating the remaining entities after one is removed', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
-			await system.init();
+			await initSystem(system);
 
 			let survivor = createEntity({ maxHealth: 100 });
 			let leaving = createEntity({ maxHealth: 100 });
@@ -329,7 +335,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		it('passes per-run data through addDataToWorld', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
 			system.damagePerRun = 5;
-			await system.init();
+			await initSystem(system);
 
 			let entity = createEntity({ maxHealth: 100 });
 
@@ -339,9 +345,24 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(entity.components.health?.health).toEqual(95);
 		});
 
+		it('merges updateFunction.init\'s result onto the world on every run', async () => {
+			let system = useSystem(new DamageSystem(world, mode, 7));
+			await initSystem(system);
+
+			let entity = createEntity({ maxHealth: 100 });
+
+			system.run(16);
+			await flush();
+			expect(entity.components.health?.health).toEqual(93);
+
+			system.run(16);
+			await flush();
+			expect(entity.components.health?.health).toEqual(86);
+		});
+
 		it('only runs the update for entities matching the system', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
-			await system.init();
+			await initSystem(system);
 
 			let matching = createEntity({ maxHealth: 100 });
 			let ignored = createEntity({ speed: 100 });
@@ -355,7 +376,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 		it('killEntityWorker removes the entity from the world', async () => {
 			let system = useSystem(new KillSystem(world, mode));
-			await system.init();
+			await initSystem(system);
 
 			let entity = createEntity({ maxHealth: 100 });
 			expect(world.entities.has(entity.eid)).toEqual(true);
@@ -369,7 +390,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 		it('createEntityWorker adds the requested entity to the world', async () => {
 			let system = useSystem(new SpawnSystem(world, mode));
-			await system.init();
+			await initSystem(system);
 
 			let entity = createEntity({ maxHealth: 100 });
 			expect(world.entities.size).toEqual(1);
@@ -390,7 +411,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		// via the world's getEntityByEid fallback.
 		it('routes a death event to an entity only present in a sub-query', async () => {
 			let system = useSystem(new QueryTargetSystem(world, mode));
-			await system.init();
+			await initSystem(system);
 
 			// The killer is the only movement (main-query) entity; the target is health-only, so it lives in the
 			// `targets` sub-query.
@@ -412,7 +433,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 		it('routes a component-property-updated event to an entity only present in a sub-query', async () => {
 			let system = useSystem(new QueryTargetSystem(world, mode));
-			await system.init();
+			await initSystem(system);
 
 			createEntity({ speed: 100 });
 			let target = createEntity({ maxHealth: 100 });
@@ -434,7 +455,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 		describe('system events', () => {
 			it('emits one event on the system carrying every entity id it happened to', async () => {
 				let system = useSystem(new DamageSystem(world, mode));
-				await system.init();
+				await initSystem(system);
 
 				let first = createEntity({ maxHealth: 100 });
 				let second = createEntity({ maxHealth: 100 });
@@ -455,7 +476,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 			it('does not emit an event no entity reported this run', async () => {
 				let system = useSystem(new DamageSystem(world, mode));
-				await system.init();
+				await initSystem(system);
 
 				createEntity({ speed: 100 });
 
@@ -472,7 +493,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 			it('reports a fresh batch each run rather than accumulating', async () => {
 				let system = useSystem(new DamageSystem(world, mode));
-				await system.init();
+				await initSystem(system);
 
 				let entity = createEntity({ maxHealth: 100 });
 
@@ -493,7 +514,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			// run's `death` (a per-entity event) goes on to remove.
 			it('emits before the per-entity events of the same run', async () => {
 				let system = useSystem(new KillSystem(world, mode));
-				await system.init();
+				await initSystem(system);
 
 				let entity = createEntity({ maxHealth: 100 });
 
@@ -541,16 +562,17 @@ class StubSystem extends ComponentSystem<Components, {}> {
 	}
 }
 
-class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld> {
+class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
 	damagePerRun?: number;
 
-	constructor(world: TestWorld, mode: Mode) {
+	constructor(world: TestWorld, mode: Mode, initDamage?: number) {
 		super(world, {
 			name: 'DamageSystem',
 			required: ['health'],
 			updateFunction: damageUpdate,
 			forceMainThread: mode === 'main-thread',
 			getWorker: () => new Worker(DAMAGE_WORKER_URL, { type: 'module' }),
+			getInitData: initDamage === undefined ? undefined : () => ({ damage: initDamage }),
 		});
 	}
 

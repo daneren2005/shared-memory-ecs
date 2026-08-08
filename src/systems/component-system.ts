@@ -15,15 +15,17 @@ export default abstract class ComponentSystem<
 	C extends ComponentMap,
 	T extends EntityUpdateComponents<C>,
 	W extends ComponentSystemWorld = ComponentSystemWorld,
+	D = unknown,
 > extends System<C> {
 	entities: Map<number, BaseEntity<C>> = new Map();
-	options: ComponentSystemConfig<C, T, W>;
+	options: ComponentSystemConfig<C, T, W, D>;
 
-	worker: Worker | ComponentWebWorker<C, T, W>;
+	worker: Worker | ComponentWebWorker<C, T, W, D>;
 	isWorkerThread: boolean;
 
-	private loaded = false;
-	private loadingPromise: { promise: Promise<void>, resolve: (value: void | PromiseLike<void>) => void } | null = null;
+	private initialized = false;
+	private initPromise: Resolvable | null = null;
+	private loadingPromise: Resolvable | null = null;
 	private isRunning = false;
 	private queryEntities: { [key: string]: Map<number, BaseEntity<C>> } = {};
 	// Membership changes since the last run(), flushed each run as a delta so a steady-state run sends empty
@@ -32,7 +34,7 @@ export default abstract class ComponentSystem<
 
 	addDataToWorld?(world: W): void;
 
-	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: ComponentSystemConfig<C, T, W>) {
+	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: ComponentSystemConfig<C, T, W, D>) {
 		super(world, options);
 		this.options = options;
 		Object.keys(this.options.queries ?? {}).forEach(queryName => {
@@ -64,8 +66,13 @@ export default abstract class ComponentSystem<
 	private initWorker() {
 		this.worker.onmessage = (e: MessageEvent) => {
 			let message = e.data as ComponentWorkerMessage;
-			if(message.type === 'loaded') {
-				this.loaded = true;
+			if(message.type === 'init-complete') {
+				this.initialized = true;
+				if(this.initPromise) {
+					this.initPromise.resolve();
+					this.initPromise = null;
+				}
+			} else if(message.type === 'loaded') {
 				if(this.loadingPromise) {
 					this.loadingPromise.resolve();
 					this.loadingPromise = null;
@@ -100,7 +107,7 @@ export default abstract class ComponentSystem<
 			}
 		};
 
-		const message: ComponentWorkerMessage = {
+		const message: ComponentWorkerMessage<W, D> = {
 			type: 'init',
 		};
 
@@ -108,17 +115,35 @@ export default abstract class ComponentSystem<
 	}
 
 	init(): Promise<void> | void {
-		if(this.loaded) {
+		if(this.initialized) {
 			return;
-		} else if(this.loadingPromise) {
-			return this.loadingPromise.promise;
+		} else if(this.initPromise) {
+			return this.initPromise.promise;
 		}
 
 		let { promise, resolve } = Promise.withResolvers<void>();
+		this.initPromise = {
+			promise,
+			resolve,
+		};
+		return promise;
+	}
+
+	// Sends the init data over and runs the update function's own init in the worker
+	finishLoading(): Promise<void> {
+		let { promise, resolve } = Promise.withResolvers<void>();
+		// Assigned before posting: the main-thread fallback replies synchronously from inside postMessage.
 		this.loadingPromise = {
 			promise,
 			resolve,
 		};
+
+		const message: ComponentWorkerMessage<W, D> = {
+			type: 'load',
+			data: this.options.getInitData?.(),
+		};
+		this.worker.postMessage(message);
+
 		return promise;
 	}
 
@@ -265,6 +290,11 @@ export default abstract class ComponentSystem<
 	}
 }
 
+interface Resolvable {
+	promise: Promise<void>
+	resolve: (value: void | PromiseLike<void>) => void
+}
+
 export type EntityUpdateComponents<C extends ComponentMap = ComponentMap> = { [K in keyof C]?: ComponentTypedArray };
 export type EntityQueryComponents<C extends ComponentMap = ComponentMap> = { [key: string]: Array<{ entityId: number, components: EntityUpdateComponents<C> }> };
 type EntityUpdateFunctionImpl<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> = (
@@ -274,10 +304,17 @@ type EntityUpdateFunctionImpl<C extends ComponentMap, T extends EntityUpdateComp
 	queries: EntityQueryComponents<C>,
 	callbacks: ComponentSystemCallbacks<C>,
 ) => void;
-export type EntityUpdateFunction<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> = EntityUpdateFunctionImpl<C, T, W> & {
+export type EntityUpdateFunction<
+	C extends ComponentMap,
+	T extends EntityUpdateComponents<C>,
+	W extends ComponentSystemWorld = ComponentSystemWorld,
+	D = unknown,
+> = EntityUpdateFunctionImpl<C, T, W> & {
 	preRun?: EntityUpdatePreRunFunction<C, T, W>
 	entityRemoved?: EntityRemovedFunction<C, W>
+	init?: EntityUpdateInitFunction<W, D>
 };
+export type EntityUpdateInitFunction<W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> = (data: D | undefined) => Partial<W> | void;
 export type EntityUpdatePreRunFunction<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> = (
 	world: W,
 	entities: Array<UpdateEntityConfigObject<T>>,
@@ -333,10 +370,12 @@ export interface ComponentSystemConfig<
 	C extends ComponentMap,
 	T extends EntityUpdateComponents<C>,
 	W extends ComponentSystemWorld = ComponentSystemWorld,
+	D = unknown,
 > extends SystemConfig, ComponentSystemQuery<C> {
-	updateFunction: EntityUpdateFunction<C, T, W>
+	updateFunction: EntityUpdateFunction<C, T, W, D>
 	getWorker: () => Worker
 	forceMainThread?: boolean
+	getInitData?: () => D
 
 	queries?: { [key: string]: ComponentSystemQuery<C> }
 }
