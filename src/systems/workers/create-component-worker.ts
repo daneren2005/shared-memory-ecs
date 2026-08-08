@@ -35,6 +35,13 @@ export default function createComponentWorker<
 			postMessageTyped(scope, {
 				type: 'loaded',
 			});
+		} else if(message.type === 'reset') {
+			// Drop the persistent lists so a reused world starts empty; worldExtension is refreshed by the next load.
+			entities = [];
+			for(const key of Object.keys(queryEntities)) {
+				delete queryEntities[key];
+			}
+			worldExtension = undefined;
 		} else if(message.type === 'run') {
 			if(worldExtension) {
 				Object.assign(message.world, worldExtension);
@@ -99,6 +106,7 @@ export default function createComponentWorker<
 
 			postMessageTyped(scope, {
 				type: 'run-complete',
+				generation: message.generation,
 				runTime,
 				events: entityEvents,
 				systemEvents,

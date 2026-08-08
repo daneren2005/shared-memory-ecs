@@ -27,6 +27,8 @@ export default abstract class ComponentSystem<
 	private initPromise: Resolvable | null = null;
 	private loadingPromise: Resolvable | null = null;
 	private isRunning = false;
+	// Bumped by clear(); checked on each event to make certain we are dealing with the correct world
+	private generation = 0;
 	private queryEntities: { [key: string]: Map<number, BaseEntity<C>> } = {};
 	// Membership changes since the last run(), flushed each run as a delta so a steady-state run sends empty
 	// arrays rather than re-transmitting every eid. The worker applies these to its own list (see applyQueryDelta).
@@ -78,6 +80,11 @@ export default abstract class ComponentSystem<
 					this.loadingPromise = null;
 				}
 			} else if(message.type === 'run-complete') {
+				// A reply from a run that started before a clear(): the world it ran over is gone, so drop it whole.
+				if(message.generation !== this.generation) {
+					return;
+				}
+
 				this.isRunning = false;
 				this.world.emit(`system-${this.name}-worker-finished`, message.runTime);
 
@@ -147,6 +154,21 @@ export default abstract class ComponentSystem<
 		return promise;
 	}
 
+	// Un-initializes the system so its world can be reused
+	clear() {
+		super.clear();
+
+		this.isRunning = false;
+		this.generation++;
+
+		this.entities.clear();
+		Object.values(this.queryEntities).forEach(list => list.clear());
+		this.queryDeltas = {};
+
+		const message: ComponentWorkerMessage = { type: 'reset' };
+		this.worker.postMessage(message);
+	}
+
 	update(elapsedTime: number): boolean {
 		if(this.isRunning) {
 			this.currentDelta += elapsedTime;
@@ -171,6 +193,7 @@ export default abstract class ComponentSystem<
 		});
 		let message: ComponentWorkerMessage<W> = {
 			type: 'run',
+			generation: this.generation,
 			world,
 			entities,
 			queries,

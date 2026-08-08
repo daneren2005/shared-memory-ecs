@@ -69,6 +69,12 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   `{ entities: Cfg[], gameTime?, playerTime?, timeScale? }`.
 - **Update:** `world.update(dt)` → `update-started` → per system `shouldRun`/`update`
   (timeScale-scaled, skipped while paused) → `update-finished`.
+- **Clear / reuse:** `world.load()` removes every entity then calls `system.clear()` before loading the new
+  batch. `ComponentSystem.clear()` resets `isRunning`, empties its main-thread caches (`entities`,
+  `queryEntities`, `queryDeltas`), posts `reset` to drop the worker's persistent lists, and bumps a `generation`
+  counter. Each `run` message carries the current `generation` and the worker echoes it on `run-complete`; a
+  reply whose generation no longer matches is dropped, so a run still in flight when the world was reloaded can't
+  report its events/creations into the new world.
 - **System startup (two phases):** `system.init()` resolves once the worker is up — `ComponentSystem` posts
   `init` in its constructor and the worker answers `init-complete`. `system.finishLoading()` then posts `load`
   carrying `getInitData()`'s result; the worker runs `updateFunction.init` and answers `loaded`. `world.init()`

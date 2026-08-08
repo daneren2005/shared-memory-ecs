@@ -18,8 +18,14 @@ interface LoadedMessage {
 	type: 'loaded'
 }
 
+// Tells the worker to drop its persistent entity/query lists so a reused world starts from empty
+interface ResetMessage {
+	type: 'reset'
+}
+
 interface RunUpdateMessage<W extends ComponentSystemWorld = ComponentSystemWorld> {
 	type: 'run'
+	generation: number
 	world: W
 	entities: QueryDelta
 	queries: { [key: string]: QueryDelta }
@@ -39,6 +45,7 @@ export type SystemEvents = { [event: string]: Array<number> };
 
 interface EntityEventsMessage {
 	type: 'run-complete'
+	generation: number
 	runTime: number
 	events: Array<EntityEvent>
 	systemEvents: SystemEvents
@@ -46,5 +53,5 @@ interface EntityEventsMessage {
 }
 
 type ComponentWorkerMessage<W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> =
-	InitMessage | InitCompleteMessage | LoadMessage<D> | LoadedMessage | RunUpdateMessage<W> | EntityEventsMessage;
+	InitMessage | InitCompleteMessage | LoadMessage<D> | LoadedMessage | ResetMessage | RunUpdateMessage<W> | EntityEventsMessage;
 export default ComponentWorkerMessage;

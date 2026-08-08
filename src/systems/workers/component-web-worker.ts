@@ -28,6 +28,10 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 			this.onMessageTyped({
 				type: 'loaded',
 			});
+		} else if(message.type === 'reset') {
+			// Drop the persistent lists so a reused world starts empty; worldExtension is refreshed by the next load.
+			this.entities = [];
+			this.queryEntities = {};
 		} else if(message.type === 'run') {
 			if(this.worldExtension) {
 				Object.assign(message.world, this.worldExtension);
@@ -93,6 +97,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 
 			this.onMessageTyped({
 				type: 'run-complete',
+				generation: message.generation,
 				runTime,
 				events: entityEvents,
 				systemEvents,
