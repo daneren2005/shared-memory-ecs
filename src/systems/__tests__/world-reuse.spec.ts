@@ -64,6 +64,7 @@ describe('component-system world reuse', () => {
 
 	it('resets its in-flight running flag when the world is cleared', () => {
 		let system = useSystem(new DamageSystem(world));
+		world.loadEntity({ maxHealth: 100 });
 
 		// Model a run in flight: run() sets this when it posts to the worker and only the reply clears it.
 		Reflect.set(system, 'isRunning', true);

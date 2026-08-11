@@ -26,6 +26,7 @@ export default abstract class ComponentSystem<
 	private initialized = false;
 	private initPromise: Resolvable | null = null;
 	private loadingPromise: Resolvable | null = null;
+	private runCompletePromise: Resolvable | null = null;
 	private isRunning = false;
 	// Bumped by clear(); checked on each event to make certain we are dealing with the correct world
 	private generation = 0;
@@ -111,6 +112,12 @@ export default abstract class ComponentSystem<
 				});
 
 				this.world.emit(`system-${this.name}-worker-events-finished`, message.runTime);
+				this.world.notifySystemRunCompleted(this);
+
+				if(this.runCompletePromise) {
+					this.runCompletePromise.resolve();
+					this.runCompletePromise = null;
+				}
 			}
 		};
 
@@ -158,6 +165,12 @@ export default abstract class ComponentSystem<
 	clear() {
 		super.clear();
 
+		if(this.isRunning) {
+			if(!this.runCompletePromise) {
+				const { promise, resolve } = Promise.withResolvers<void>();
+				this.runCompletePromise = { promise, resolve };
+			}
+		}
 		this.isRunning = false;
 		this.generation++;
 
@@ -177,6 +190,21 @@ export default abstract class ComponentSystem<
 		} else {
 			return super.update(elapsedTime);
 		}
+	}
+	// A run finishes off-thread, not when update() returns; completedRuns is bumped on the worker's run-complete.
+	protected onRunFinished() {}
+	isCurrentlyRunning(): boolean {
+		return this.isRunning;
+	}
+	waitForRunToComplete(): void | Promise<void> {
+		if(!this.isRunning) {
+			return;
+		}
+		if(!this.runCompletePromise) {
+			const { promise, resolve } = Promise.withResolvers<void>();
+			this.runCompletePromise = { promise, resolve };
+		}
+		return this.runCompletePromise.promise;
 	}
 	run(elapsedTime: number): void {
 		const world = {

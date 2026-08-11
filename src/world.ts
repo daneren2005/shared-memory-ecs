@@ -14,6 +14,18 @@ import { entityDefinition, type EntityComponent } from './entity-component';
 import EntityFactory from './entity-factory';
 
 const DEFAULT_HEAP_SIZE = MAX_BYTE_OFFSET_LENGTH;
+const FREE_BUFFER_STUCK_MS = 10000;
+
+interface DeferredComponentFree {
+	memoryComponent: MemoryComponent
+	index: number
+}
+// A batch of component blocks queued to be freed, plus the systems that must each finish a run before it is safe to free them
+interface ComponentFreeBuffer<C extends ComponentMap> {
+	frees: Array<DeferredComponentFree>
+	waitingSystems: Set<System<C>>
+	waitElapsed: number
+}
 
 export interface WorldOptions<C extends ComponentMap = ComponentMap, Cfg = any> {
 	heapSize?: number
@@ -47,6 +59,13 @@ export default class BaseWorld<
 	timeScale = 1;
 	paused = false;
 	destroyed = false;
+	// True while the world has never been loaded into
+	pristine = true;
+
+	// Two rolling buffers of component blocks awaiting a safe free. New deferrals land in `next`; `active` is the
+	// one currently waiting for its systems to each finish a run before its blocks can be reused
+	private activeFreeBuffer: ComponentFreeBuffer<C> = { frees: [], waitingSystems: new Set(), waitElapsed: 0 };
+	private nextFreeBuffer: ComponentFreeBuffer<C> = { frees: [], waitingSystems: new Set(), waitElapsed: 0 };
 
 	// The entity component is added automatically, so it must not be part of the passed registry.
 	constructor(registry: R, options: WorldOptions<C, Cfg> = {}) {
@@ -79,6 +98,8 @@ export default class BaseWorld<
 	addEntity(entity: BaseEntity<C, Cfg>, created = true): BaseEntity<C, Cfg> {
 		this.entities.set(entity.eid, entity);
 		entity.world = this;
+		// Any entity in the world means there is state to tear down on the next load/clear.
+		this.pristine = false;
 
 		entity.on('component-added', (name: keyof C) => {
 			this.addEntityToComponentSystem(entity, name);
@@ -103,11 +124,15 @@ export default class BaseWorld<
 	// Replaces the world's contents. Entities load with created = false so no finishLoading runs mid-batch;
 	// finishLoading is called on each once the whole batch exists, so cross-entity dependencies can resolve.
 	load(config: WorldConfig<Cfg>) {
-		// Iterate over a copy since removeEntity mutates `this.entities`.
-		for(let entity of Array.from(this.entities.values())) {
-			this.removeEntity(entity);
+		// A pristine world (fresh or just cleared) has nothing to tear down, so skip the per-system clear.
+		if(!this.pristine) {
+			// Iterate over a copy since removeEntity mutates `this.entities`.
+			for(let entity of Array.from(this.entities.values())) {
+				this.removeEntity(entity);
+			}
+			this.systems.forEach(system => system.clear());
+			this.consolidateFreeBuffersForReload();
 		}
-		this.systems.forEach(system => system.clear());
 
 		const entities = config.entities.map(entityConfig => this.loadEntity(entityConfig, false));
 		for(let entity of entities) {
@@ -125,6 +150,24 @@ export default class BaseWorld<
 		// ComponentSystem re-sends its init data here.
 		void this.finishLoadingSystems();
 	}
+	async clear(): Promise<void> {
+		if(this.pristine) {
+			return;
+		}
+
+		for(let entity of Array.from(this.entities.values())) {
+			this.removeEntity(entity);
+		}
+		this.systems.forEach(system => system.clear());
+		await Promise.all(
+			this.systems
+				.map(system => system.waitForRunToComplete())
+				.filter(promise => promise instanceof Promise),
+		);
+		this.freeAllPendingBuffers();
+
+		this.pristine = true;
+	}
 	removeEntity(entity: BaseEntity<C, Cfg>) {
 		// delete reports whether it was actually present, so a double-remove emits entity-removed only once.
 		if(this.entities.delete(entity.eid)) {
@@ -138,6 +181,89 @@ export default class BaseWorld<
 	}
 	getEntityByEid(eid: number): BaseEntity<C, Cfg> | undefined {
 		return this.entities.get(eid);
+	}
+
+	// Queues a component block to be freed when all systems done using it
+	deferComponentMemoryFree(memoryComponent: MemoryComponent, index: number) {
+		this.nextFreeBuffer.frees.push({ memoryComponent, index });
+	}
+	// A system finished a run; if the active buffer was waiting on it, drop it and, once nothing is left to wait
+	// for, free the buffer. One completion is enough: the system is now done touching the block for that run, and
+	// every later run applies the pending removed-delta before its update loop, so it can never process the freed
+	// entity again.
+	notifySystemRunCompleted(system: System<C>) {
+		if(this.activeFreeBuffer.waitingSystems.delete(system) && this.activeFreeBuffer.waitingSystems.size === 0) {
+			this.processFreeBuffers();
+		}
+	}
+	private processFreeBuffers() {
+		// Loop so a promoted buffer with no systems to wait for is freed the same tick rather than a frame later.
+		while(this.activeFreeBuffer.waitingSystems.size === 0) {
+			if(this.activeFreeBuffer.frees.length > 0) {
+				this.performFrees(this.activeFreeBuffer);
+			}
+			if(this.nextFreeBuffer.frees.length === 0) {
+				break;
+			}
+			this.promoteNextFreeBuffer();
+		}
+	}
+	private promoteNextFreeBuffer() {
+		// active is now empty (its frees were performed); swap roles and reuse it as the new next buffer.
+		const emptied = this.activeFreeBuffer;
+		this.activeFreeBuffer = this.nextFreeBuffer;
+		this.nextFreeBuffer = emptied;
+
+		const active = this.activeFreeBuffer;
+		active.waitElapsed = 0;
+		active.waitingSystems.clear();
+		for(let system of this.systems) {
+			// Wait on a system if it will run (and so might pick up this block) or is already mid-run over memory we
+			// may free. A system that is neither can't touch these blocks, so there's nothing to wait for.
+			if(system.shouldRun() || system.isCurrentlyRunning()) {
+				active.waitingSystems.add(system);
+			}
+		}
+	}
+	// On reload every system was just cleared (its completedRuns reset and worker told to drop its lists), so the
+	// old targets no longer apply. Collapse whatever was pending into `next` with a fresh (empty) active buffer
+	private consolidateFreeBuffersForReload() {
+		if(this.activeFreeBuffer.frees.length > 0) {
+			this.nextFreeBuffer.frees.push(...this.activeFreeBuffer.frees);
+			this.activeFreeBuffer.frees.length = 0;
+		}
+		this.activeFreeBuffer.waitingSystems.clear();
+		this.activeFreeBuffer.waitElapsed = 0;
+	}
+	// Frees both buffers outright. Only safe once every system's in-flight run has finished (see clear()), since it
+	// skips the per-system wait the update loop normally enforces.
+	private freeAllPendingBuffers() {
+		this.performFrees(this.activeFreeBuffer);
+		this.performFrees(this.nextFreeBuffer);
+		this.activeFreeBuffer.waitingSystems.clear();
+		this.activeFreeBuffer.waitElapsed = 0;
+		this.nextFreeBuffer.waitingSystems.clear();
+		this.nextFreeBuffer.waitElapsed = 0;
+	}
+	private performFrees(buffer: ComponentFreeBuffer<C>) {
+		for(let free of buffer.frees) {
+			free.memoryComponent.delete(free.index);
+		}
+		buffer.frees.length = 0;
+	}
+	private checkFreeBufferTimeout(elapsedTime: number) {
+		const active = this.activeFreeBuffer;
+		if(active.waitingSystems.size === 0) {
+			return;
+		}
+
+		active.waitElapsed += elapsedTime;
+		if(active.waitElapsed >= FREE_BUFFER_STUCK_MS) {
+			const stuck = Array.from(active.waitingSystems).map(system => system.name).join(', ');
+			console.warn(`shared-memory-ecs: deferred component free waited over ${FREE_BUFFER_STUCK_MS}ms on system(s): ${stuck}; freeing anyway`);
+			active.waitingSystems.clear();
+			this.processFreeBuffers();
+		}
 	}
 
 	addSystem<T extends System<C>>(system: T): T {
@@ -172,9 +298,13 @@ export default class BaseWorld<
 		if(this.paused) {
 			return {};
 		}
+		const unscaledElapsedTime = elapsedTime;
 		elapsedTime = this.timeScale * elapsedTime;
 
 		this.gameTime += elapsedTime;
+
+		// Promote before running: a run this same update then counts toward the wait, instead of after it.
+		this.processFreeBuffers();
 
 		let lastSystemError: Error | null = null;
 		this.systems.forEach(system => {
@@ -199,6 +329,8 @@ export default class BaseWorld<
 				failed,
 			});
 		});
+
+		this.checkFreeBufferTimeout(unscaledElapsedTime);
 
 		return {
 			lastSystemError,

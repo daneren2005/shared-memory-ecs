@@ -334,6 +334,30 @@ thread already holds the values - sending them along would only pay to copy what
 System events are dispatched before the per-entity events of the same run, so an entity a run both moved and
 killed is still in the world when its move is reported.
 
+### Freeing component memory safely
+
+Component blocks live in a shared pool, so a freed block gets handed straight back out to the next entity that
+needs one. That is a problem across workers: if one system kills an entity, a second reuses its freed block for
+a brand-new entity, and a third is still mid-run over what it thinks is the old entity, the third system writes
+into the new entity's memory.
+
+So the library never frees a block the instant it is orphaned. When an entity dies or you call
+`removeComponent`, the block is *deferred* — the component is gone from the entity immediately, but the memory is
+held until every system that could be mid-run over it has finished a run. Only then is the block returned to the
+pool for reuse. This is automatic; there is nothing to call. The one visible effect is that
+`memoryComponent.length` can briefly sit one higher than the number of live components, until the next update
+lets the holding systems finish. If a system stays stuck (never completes a run) for more than ten seconds of
+unscaled time, the world logs a warning naming that system and frees the blocks anyway rather than leak them —
+a stuck system there is a bug worth chasing down.
+
+### Reusing a world: `load` and `clear`
+
+A world is meant to be reused rather than rebuilt. `world.load(config)` swaps in a fresh scenario — it removes
+the old entities, clears every system, and loads the new batch (deferred frees from the old contents drain over
+the following updates, as above). `await world.clear()` instead tears the world all the way back down to an
+empty, reusable state: it waits for every system's in-flight worker run to finish so nothing is still reading
+the memory, frees the held blocks immediately, and resolves once the world is ready to load into again.
+
 ## Measuring performance
 
 `PerformanceTiming` watches a world and reports what running it costs. Hand it the world and it hooks itself

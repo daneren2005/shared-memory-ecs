@@ -90,13 +90,19 @@ describe('entity', () => {
 		expect(updated).toEqual([['health', 'health', 5]]);
 	});
 
-	it('removeComponent frees its memory block and removes it', () => {
+	it('removeComponent removes the component and defers freeing its memory until an update', () => {
 		let world = createTestWorld();
 		let entity = world.loadEntity({ maxHealth: 20 });
 		expect(world.registry.health.memoryComponent.length).toEqual(1);
 
 		entity.removeComponent('health');
+		// The component is gone immediately, but its block is held until systems have had a chance to finish
+		// using it, so nothing can reuse it mid-run.
 		expect(entity.components.health).toBeUndefined();
+		expect(world.registry.health.memoryComponent.length).toEqual(1);
+
+		// No systems to wait on, so the next update frees it.
+		world.update(16);
 		expect(world.registry.health.memoryComponent.length).toEqual(0);
 	});
 

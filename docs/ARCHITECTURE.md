@@ -27,8 +27,8 @@ Run type-check and lint after every edit (AGENTS.md).
 | --- | --- |
 | `index.ts` | Public barrel (main-thread entry). |
 | `worker.ts` | `/worker` subpath barrel — only what runs in a worker, keeps worker bundles tiny. |
-| `world.ts` | `BaseWorld<R,C,Cfg>`: owns the heap, the registry (one `MemoryComponent` per component), `entities` (Map by eid), systems, the update loop, clocks (`gameTime`/`playerTime`/`timeScale`/`paused`), and add/remove-entity → system wiring. |
-| `entity.ts` | `BaseEntity<C,Cfg>`: eid + component bag; `load`/`save`/`finishLoading`, `loadComponent`/`removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. EventEmitter. |
+| `world.ts` | `BaseWorld<R,C,Cfg>`: owns the heap, the registry (one `MemoryComponent` per component), `entities` (Map by eid), systems, the update loop, clocks (`gameTime`/`playerTime`/`timeScale`/`paused`), add/remove-entity → system wiring, the deferred component-free buffers (`deferComponentMemoryFree`/`notifySystemRunCompleted`), and reuse via `load` / async `clear` gated by the `pristine` flag. |
+| `entity.ts` | `BaseEntity<C,Cfg>`: eid + component bag; `load`/`save`/`finishLoading`, `loadComponent`/`removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. `removeComponent`/`deleteAllComponentMemory` defer the block free to the world rather than freeing inline. EventEmitter. |
 | `entity-component.ts` | The always-present `entity` component (`type`, `dead`, `isStatic`). `dead`/`isStatic` live in memory (worker-visible); `type` is a plain string (main-thread only). Exports `DEAD_INDEX`, `STATIC_INDEX`, `entityDefinition`. |
 | `entity-factory.ts` | `EntityFactory<C,Cfg>`: maps entity `type` → base config template; layers caller config over it. `loadEntity` builds + adds to world. Override `createEntity` for subclass-per-type. |
 | `component-definition.ts` | All the component/registry types: `ComponentDefinition`, `BaseComponent`, `ComponentMap`, `ComponentRegistry`, `RegisteredComponentDefinition`, and the derivations `ComponentsOf` / `EntityConfigOf` that infer `C`/`Cfg` from a registry. |
@@ -41,7 +41,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
 
 | File | Responsibility |
 | --- | --- |
-| `system.ts` | `System<C>` abstract base: fixed-timestep `deltaBetweenRuns`, `update`→`run`, `shouldRun`, `firstRun`, plus the overridable `init`/`finishLoading` startup pair. EventEmitter (systems report a whole run in one emit). |
+| `system.ts` | `System<C>` abstract base: fixed-timestep `deltaBetweenRuns`, `update`→`run`, `shouldRun`, `firstRun`, plus the overridable `init`/`finishLoading` startup pair. `onRunFinished` (fires `world.notifySystemRunCompleted`) and `isCurrentlyRunning()` let the world's deferred free tell when a system is done with memory; `waitForRunToComplete()` (a no-op base, real promise in `ComponentSystem`) lets `world.clear()` await an in-flight run. EventEmitter (systems report a whole run in one emit). |
 | `iterable-system.ts` | `IterableSystem<C,T>`: spreads one pass over multiple frames when it exceeds `maxMsPerFrame` (`iterationsPerCheck`, `getIterables`/`updateIterable`). |
 | `entity-system.ts` | `EntitySystem<C,T>`: main-thread iteration over entities owning `options.components`; auto add/remove via world events; `entities` Map by eid; `filterEntity` skips static. |
 | `component-system.ts` | `ComponentSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks, and the update-function hooks (`init`/`preRun`/`entityRemoved`). The largest / most involved file. |
@@ -69,12 +69,33 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   `{ entities: Cfg[], gameTime?, playerTime?, timeScale? }`.
 - **Update:** `world.update(dt)` → `update-started` → per system `shouldRun`/`update`
   (timeScale-scaled, skipped while paused) → `update-finished`.
+- **Deferred component free:** a component block is never freed the instant its entity dies or its component is
+  removed — a freed block can be reused by a newly created entity while another system's worker is still mid-run
+  over the old data, corrupting the new entity. Instead `removeComponent`/`deleteAllComponentMemory` call
+  `world.deferComponentMemoryFree`, which queues the block in the `next` of two rolling buffers. Each update the
+  world promotes the pending buffer to `active`, snapshotting into a Set the systems that must each finish a run
+  first — those that `shouldRun()` (will run and might pick up the block) or are `isCurrentlyRunning()` (mid-run
+  over memory we may free). Each system needs just one completion: it drops out of the Set on its next
+  `notifySystemRunCompleted` (fired from `onRunFinished` / a worker's `run-complete`), because after that run it is
+  done with the block, and every later run applies the pending removed-delta before its update loop, so it can
+  never process the freed entity again. Once the Set empties the blocks are actually freed and the next buffer is
+  promoted. A buffer stuck longer than `FREE_BUFFER_STUCK_MS` (10s of unscaled time) warns which system it is
+  waiting on and frees anyway rather than leak. `world.load()` routes all pending frees through the same wait so
+  the reloaded world's systems each run once before the old blocks can be reused (see `consolidateFreeBuffersForReload`).
 - **Clear / reuse:** `world.load()` removes every entity then calls `system.clear()` before loading the new
   batch. `ComponentSystem.clear()` resets `isRunning`, empties its main-thread caches (`entities`,
   `queryEntities`, `queryDeltas`), posts `reset` to drop the worker's persistent lists, and bumps a `generation`
   counter. Each `run` message carries the current `generation` and the worker echoes it on `run-complete`; a
   reply whose generation no longer matches is dropped, so a run still in flight when the world was reloaded can't
-  report its events/creations into the new world.
+  report its events/creations into the new world. A `pristine` flag (true on a fresh or fully-cleared world,
+  flipped false the moment any entity is added) lets `load`/`clear` skip this whole teardown when there is
+  nothing to tear down.
+- **Async `world.clear()`:** tears the world back to a pristine, reusable state and resolves once it is safe to
+  reuse. It first awaits `system.waitForRunToComplete()` on every system (only an off-thread `ComponentSystem`
+  mid-run returns a real promise; main-thread systems are never truly mid-run between `update()` calls), so no
+  worker is still reading memory it is about to free. Then it removes every entity, clears every system, and
+  frees **both** deferred-free buffers outright (`freeAllPendingBuffers`) rather than routing them through the
+  per-update wait — safe precisely because it already waited. A pristine world resolves immediately.
 - **System startup (two phases):** `system.init()` resolves once the worker is up — `ComponentSystem` posts
   `init` in its constructor and the worker answers `init-complete`. `system.finishLoading()` then posts `load`
   carrying `getInitData()`'s result; the worker runs `updateFunction.init` and answers `loaded`. `world.init()`

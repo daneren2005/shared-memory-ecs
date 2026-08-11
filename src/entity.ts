@@ -38,7 +38,8 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 	removeComponent<K extends keyof C>(name: K) {
 		const component = this.components[name];
 		if(component) {
-			(this.world.registry as RegisteredComponentRegistry<C>)[name].memoryComponent.delete(component.index);
+			const memoryComponent = (this.world.registry as RegisteredComponentRegistry<C>)[name].memoryComponent;
+			this.world.deferComponentMemoryFree(memoryComponent, component.index);
 			delete this.components[name];
 			this.emit('component-removed', name);
 		}
@@ -78,7 +79,7 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 		for(let name of Object.keys(this.components) as Array<keyof C>) {
 			const component = this.components[name];
 			if(component) {
-				registry[name].memoryComponent.delete(component.index);
+				this.world.deferComponentMemoryFree(registry[name].memoryComponent, component.index);
 			}
 		}
 	}

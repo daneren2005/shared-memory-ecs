@@ -26,6 +26,9 @@ export default abstract class IterableSystem<C extends ComponentMap, T> extends 
 		if(this.remainingInstancesToRun.length) {
 			this.runIterables(this.remainingInstancesToRun, this.remainingInstancesStartTime ?? 0);
 			this.currentDelta += elapsedTime;
+			if(!this.remainingInstancesToRun.length) {
+				this.onRunFinished();
+			}
 
 			return true;
 		} else {
@@ -36,6 +39,19 @@ export default abstract class IterableSystem<C extends ComponentMap, T> extends 
 		let iterables = this.getIterables();
 		this.runIterables(iterables, elapsedTime);
 	}
+	// A run that overflowed onto a later frame isn't finished yet; only count it once the queue drains (handled
+	// by update() when it empties remainingInstancesToRun).
+	protected onRunFinished() {
+		if(this.remainingInstancesToRun.length) {
+			return;
+		}
+
+		super.onRunFinished();
+	}
+	isCurrentlyRunning(): boolean {
+		return this.remainingInstancesToRun.length > 0;
+	}
+
 	runIterables(iterables: Array<T>, elapsedTime: number) {
 		let started = performance.now();
 		this.beforeRunIterables();

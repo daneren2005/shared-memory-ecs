@@ -18,7 +18,7 @@ describe('world load', () => {
 		expect(listOf(world.entities)[1].components.health?.maxHealth).toEqual(10);
 	});
 
-	it('clears existing entities and frees their memory before loading', () => {
+	it('clears existing entities and defers freeing their memory until systems have run once', () => {
 		let world = createTestWorld();
 		let old = world.loadEntity({ maxHealth: 20 });
 		expect(world.registry.health.memoryComponent.length).toEqual(1);
@@ -27,8 +27,14 @@ describe('world load', () => {
 
 		expect(world.entities.has(old.eid)).toEqual(false);
 		expect(world.getEntityByEid(old.eid)).toBeUndefined();
-		expect(world.registry.health.memoryComponent.length).toEqual(1);
+		// The old block is still held (new entity got a fresh one) until systems have run once over the reloaded
+		// world, so a worker mid-run can't have its memory reused underneath it.
+		expect(world.registry.health.memoryComponent.length).toEqual(2);
 		expect(listOf(world.entities)[0].components.health?.maxHealth).toEqual(10);
+
+		// No systems to wait on, so the next update frees the old block and the pool settles back to one.
+		world.update(16);
+		expect(world.registry.health.memoryComponent.length).toEqual(1);
 	});
 
 	it('clears existing systems before loading', () => {

@@ -41,6 +41,7 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 			this.run(this.currentDelta - leftOverDelta);
 			this.currentDelta = leftOverDelta;
 			this.firstRun = false;
+			this.onRunFinished();
 
 			return true;
 		} else {
@@ -48,6 +49,19 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 		}
 	}
 	abstract run(elapsedTime: number): void;
+
+	// Marks one run as fully applied. Synchronous systems finish inside update(); subclasses whose work is
+	// deferred (spread across frames, or off-thread) override this and call it at their real completion point.
+	protected onRunFinished() {
+		this.world.notifySystemRunCompleted(this);
+	}
+	// True while a run is still in progress between update() calls (a worker round-trip, or an iteration spread
+	// across frames). Used by the world to keep waiting on a system that is mid-run over memory it may free.
+	isCurrentlyRunning(): boolean {
+		return false;
+	}
+	// Resolves once any in-flight run has finished, so the world's clear() knows nothing is still reading memory
+	waitForRunToComplete(): void | Promise<void> {}
 
 	shouldRun(): boolean {
 		return true;
