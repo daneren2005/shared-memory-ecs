@@ -19,6 +19,8 @@ const FREE_BUFFER_STUCK_MS = 10000;
 interface DeferredComponentFree {
 	memoryComponent: MemoryComponent
 	index: number
+	// The definition's free hook, deferred to fire alongside the block free rather than the instant the entity dies.
+	free?: () => void
 }
 // A batch of component blocks queued to be freed, plus the systems that must each finish a run before it is safe to free them
 interface ComponentFreeBuffer<C extends ComponentMap> {
@@ -183,9 +185,10 @@ export default class BaseWorld<
 		return this.entities.get(eid);
 	}
 
-	// Queues a component block to be freed when all systems done using it
-	deferComponentMemoryFree(memoryComponent: MemoryComponent, index: number) {
-		this.nextFreeBuffer.frees.push({ memoryComponent, index });
+	// Queues a component block to be freed when all systems done using it, running the definition's free hook (if any)
+	// at that same deferred point so a system still mid-run can't observe the resource being torn down early.
+	deferComponentMemoryFree(memoryComponent: MemoryComponent, index: number, free?: () => void) {
+		this.nextFreeBuffer.frees.push({ memoryComponent, index, free });
 	}
 	// A system finished a run; if the active buffer was waiting on it, drop it and, once nothing is left to wait
 	// for, free the buffer. One completion is enough: the system is now done touching the block for that run, and
@@ -246,8 +249,9 @@ export default class BaseWorld<
 		this.nextFreeBuffer.waitElapsed = 0;
 	}
 	private performFrees(buffer: ComponentFreeBuffer<C>) {
-		for(let free of buffer.frees) {
-			free.memoryComponent.delete(free.index);
+		for(let deferred of buffer.frees) {
+			deferred.free?.();
+			deferred.memoryComponent.delete(deferred.index);
 		}
 		buffer.frees.length = 0;
 	}

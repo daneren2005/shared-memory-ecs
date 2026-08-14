@@ -36,10 +36,10 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 		return component;
 	}
 	removeComponent<K extends keyof C>(name: K) {
-		const component = this.components[name];
+		const component = (this.components as Partial<C>)[name];
 		if(component) {
-			const memoryComponent = (this.world.registry as RegisteredComponentRegistry<C>)[name].memoryComponent;
-			this.world.deferComponentMemoryFree(memoryComponent, component.index);
+			const definition = (this.world.registry as RegisteredComponentRegistry<C>)[name];
+			this.world.deferComponentMemoryFree(definition.memoryComponent, component.index, definition.free ? () => definition.free!(component) : undefined);
 			delete this.components[name];
 			this.emit('component-removed', name);
 		}
@@ -76,10 +76,12 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 
 	deleteAllComponentMemory() {
 		const registry = this.world.registry as RegisteredComponentRegistry<C>;
-		for(let name of Object.keys(this.components) as Array<keyof C>) {
-			const component = this.components[name];
+		const components = this.components as Partial<C>;
+		for(let name of Object.keys(components) as Array<keyof C>) {
+			const definition = registry[name];
+			const component = components[name];
 			if(component) {
-				this.world.deferComponentMemoryFree(registry[name].memoryComponent, component.index);
+				this.world.deferComponentMemoryFree(definition.memoryComponent, component.index, definition.free ? () => definition.free!(component) : undefined);
 			}
 		}
 	}

@@ -28,10 +28,10 @@ Run type-check and lint after every edit (AGENTS.md).
 | `index.ts` | Public barrel (main-thread entry). |
 | `worker.ts` | `/worker` subpath barrel — only what runs in a worker, keeps worker bundles tiny. |
 | `world.ts` | `BaseWorld<R,C,Cfg>`: owns the heap, the registry (one `MemoryComponent` per component), `entities` (Map by eid), systems, the update loop, clocks (`gameTime`/`playerTime`/`timeScale`/`paused`), add/remove-entity → system wiring, the deferred component-free buffers (`deferComponentMemoryFree`/`notifySystemRunCompleted`), and reuse via `load` / async `clear` gated by the `pristine` flag. |
-| `entity.ts` | `BaseEntity<C,Cfg>`: eid + component bag; `load`/`save`/`finishLoading`, `loadComponent`/`removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. `removeComponent`/`deleteAllComponentMemory` defer the block free to the world rather than freeing inline. EventEmitter. |
+| `entity.ts` | `BaseEntity<C,Cfg>`: eid + component bag; `load`/`save`/`finishLoading`, `loadComponent`/`removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. `removeComponent`/`deleteAllComponentMemory` call the definition's optional `free(component)` (release extra heap the component owns) then defer the block free to the world rather than freeing inline. EventEmitter. |
 | `entity-component.ts` | The always-present `entity` component (`type`, `dead`, `isStatic`). `dead`/`isStatic` live in memory (worker-visible); `type` is a plain string (main-thread only). Exports `DEAD_INDEX`, `STATIC_INDEX`, `entityDefinition`. |
 | `entity-factory.ts` | `EntityFactory<C,Cfg>`: maps entity `type` → base config template; layers caller config over it. `loadEntity` builds + adds to world. Override `createEntity` for subclass-per-type. |
-| `component-definition.ts` | All the component/registry types: `ComponentDefinition`, `BaseComponent`, `ComponentMap`, `ComponentRegistry`, `RegisteredComponentDefinition`, and the derivations `ComponentsOf` / `EntityConfigOf` that infer `C`/`Cfg` from a registry. |
+| `component-definition.ts` | All the component/registry types: `ComponentDefinition` (incl. the optional `free(component)` teardown hook — release extra heap the component allocated in `load`), `BaseComponent`, `ComponentMap`, `ComponentRegistry`, `RegisteredComponentDefinition`, and the derivations `ComponentsOf` / `EntityConfigOf` that infer `C`/`Cfg` from a registry. |
 | `memory-component.ts` | `MemoryComponent`: a pool of same-sized blocks in the heap (`create`/`getBlock`/`get`/`set`/`delete`/`clear`). Backing type is `ComponentTypedArray`. |
 | `performance-timing.ts` | `PerformanceTiming`: hooks world events, emits `stats-updated` snapshots (`update` / per-system `run`+`events` / `events`). Non-invasive. |
 
@@ -72,7 +72,10 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
 - **Deferred component free:** a component block is never freed the instant its entity dies or its component is
   removed — a freed block can be reused by a newly created entity while another system's worker is still mid-run
   over the old data, corrupting the new entity. Instead `removeComponent`/`deleteAllComponentMemory` call
-  `world.deferComponentMemoryFree`, which queues the block in the `next` of two rolling buffers. Each update the
+  `world.deferComponentMemoryFree`, which queues the block — plus the definition's optional `free(component)` hook
+  (for anything the component owns beyond its block: a SharedList, child entities) — in the `next` of two rolling
+  buffers. The `free` hook runs at the same deferred point as the block delete (in `performFrees`), not the instant
+  the entity dies, so a system still mid-run can't observe the resource torn down early. Each update the
   world promotes the pending buffer to `active`, snapshotting into a Set the systems that must each finish a run
   first — those that `shouldRun()` (will run and might pick up the block) or are `isCurrentlyRunning()` (mid-run
   over memory we may free). Each system needs just one completion: it drops out of the Set on its next

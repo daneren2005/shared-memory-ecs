@@ -10,10 +10,11 @@ fog of war, sub-classed entities, required components, etc).
 - **Component** – a plain object with an `index` (its block inside a shared-memory pool) plus getters/
   setters over that memory. Games decide what components exist.
 - **`ComponentDefinition`** – describes a component: its typed array `type`, block `size`, the config keys
-  that trigger loading (`loadProperties`), a `load(entity, memory, config)` and an optional `save(component)`.
-  A component's data splits into `Config` (defining props supplied up front, e.g. `maxHealth`) and
-  `Serialization` (runtime-derived state, e.g. current `health`); `load` sees `Config & Serialization` while
-  `save` returns only the `Serialization` slice.
+  that trigger loading (`loadProperties`), a `load(entity, memory, config)`, an optional `save(component)`,
+  and an optional `free(component)`. A component's data splits into `Config` (defining props supplied up
+  front, e.g. `maxHealth`) and `Serialization` (runtime-derived state, e.g. current `health`); `load` sees
+  `Config & Serialization` while `save` returns only the `Serialization` slice. `free` runs when the
+  component is torn down (see [Freeing extra resources](#freeing-extra-resources)).
 - **`ComponentRegistry<C>`** – the map of all component definitions for a game.
 - **`EntityFactory<C>`** – maps an entity `type` name to a base (template) config. Loading an entity layers
   the caller's config over its type's template, so shared static data lives in one place and a save only
@@ -349,6 +350,32 @@ pool for reuse. This is automatic; there is nothing to call. The one visible eff
 lets the holding systems finish. If a system stays stuck (never completes a run) for more than ten seconds of
 unscaled time, the world logs a warning naming that system and frees the blocks anyway rather than leak them —
 a stuck system there is a bug worth chasing down.
+
+### Freeing extra resources
+
+Everything above frees a component's own block. A component that allocates something *else* in `load` —
+another heap structure (a `SharedList`, a `SharedString`) or child entities it owns — needs to release that
+too, and the block-level deferred free won't do it. Give the definition an optional `free(component)`:
+
+```ts
+const cargoDefinition: ComponentDefinition<Cargo, Uint32Array, CargoConfig> = {
+  type: Uint32Array,
+  size: 3,
+  loadProperties: ['cargoSpace'],
+  load(entity, memory, config) {
+    /* allocate a SharedList in the heap, stash its pointer in the block, return accessors */
+  },
+  free(component) {
+    component.items.free(); // release the SharedList + the item entities it holds
+  },
+};
+```
+
+`free` runs exactly once per component teardown: on `removeComponent`, and on every path that removes an
+entity — `removeEntity`, a `death` (from `killEntity`), a `load` that drops the old batch, and `clear`.
+It is deferred to the same safe point as the component's own block (see above), not fired the instant the
+entity dies — so a system still mid-run over that memory can't see your resource released early. Reload calls
+it without any `death` event, so it is the reliable place to avoid leaks when a world is reused.
 
 ### Reusing a world: `load` and `clear`
 

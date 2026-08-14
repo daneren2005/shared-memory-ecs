@@ -27,6 +27,8 @@ export interface ComponentDefinition<
 	loadInFinishLoading?: boolean
 	load(entity: BaseEntity, memory: MemoryComponent<T>, config: Config & Serialization): Component
 	save?(component: Component): Serialization
+	// Called when the component is torn down (removeComponent, or the entity being removed/killed/cleared)
+	free?(component: Component): void
 }
 
 export type RegisteredComponentDefinition<
