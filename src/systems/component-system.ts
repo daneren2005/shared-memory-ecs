@@ -328,6 +328,14 @@ export default abstract class ComponentSystem<
 		});
 	}
 
+	// Re-evaluates every entity's membership against the current queries. Needed when a `filter` closes over mutable
+	// state (e.g. a scope keyed on which group is active) and that state changes with no entity event to react to
+	recheckMembership() {
+		this.world.entities.forEach(entity => {
+			this.checkAddEntity(entity);
+		});
+	}
+
 	shouldRun(): boolean {
 		return this.entities.size > 0;
 	}
