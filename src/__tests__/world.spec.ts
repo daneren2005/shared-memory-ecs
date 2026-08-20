@@ -1,8 +1,27 @@
-import { System, killEntity } from '../index';
-import { createTestWorld, type Components, type TestWorld } from './fixtures/components';
+import { System, killEntity, EntityFactory } from '../index';
+import { createTestWorld, type Components, type Config, type TestWorld } from './fixtures/components';
 import { listOf } from './fixtures/entity-collections';
 
 describe('world load', () => {
+	it('interns a constant string for every factory type, even ones no loaded entity uses', () => {
+		const factory = new EntityFactory<Components, Config>({
+			'Space Ship': { maxHealth: 10 },
+			'Miner': { maxHealth: 5 },
+		});
+		let world = createTestWorld(factory);
+
+		// No entities of either type are loaded, yet both types must still be resolvable in a worker.
+		world.load({ entities: [] });
+
+		for(let type of ['Space Ship', 'Miner']) {
+			const usedBefore = world.heap.currentUsed;
+			// Already interned during load, so getOrCreate is a cache hit and allocates nothing more.
+			const pointer = world.constantStrings.getOrCreate(type).pointer;
+			expect(world.heap.currentUsed).toEqual(usedBefore);
+			expect(world.constantStrings.getString(pointer)).toEqual(type);
+		}
+	});
+
 	it('loads every entity from the config', () => {
 		let world = createTestWorld();
 		world.load({

@@ -111,6 +111,12 @@ console.log(goblin.save()); // { type: 'goblin', health: 10 } - no templated max
 world.loadEntity(goblin.save());
 ```
 
+An entity's `type` lives in shared memory (worker-visible), not as a plain field. Each distinct type string is
+interned once as an immutable `ConstantString` in the heap — 15 `"Space Ship"` entities share one allocation —
+and the `entity` block stores only a pointer to it at `TYPE_INDEX`. Reading `entity.components.entity.type`
+resolves that pointer back to the string through the world's cache; a worker can do the same (see
+[Reading an entity's type in a worker](#reading-an-entitys-type-in-a-worker)).
+
 ## Iterating entities
 
 `world.entities` is a `Map` keyed by `eid`, not an array, and so is `entities` on `EntitySystem` and
@@ -259,8 +265,8 @@ barrel: importing `createComponentWorker` from `@daneren2005/shared-memory-ecs` 
 `BaseWorld`, every system, their `@daneren2005/shared-memory-objects` dependencies - into the worker, even
 though a worker never runs any of it (easily ~20kb of dead code per worker). Import worker-side helpers from
 the `@daneren2005/shared-memory-ecs/worker` subpath instead. It exposes only what runs in a worker -
-`createComponentWorker`, `createEntityWorker`, `killEntityWorker`, `DEAD_INDEX` (plus the worker-relevant
-types) - so the bundle stays tiny:
+`createComponentWorker`, `createEntityWorker`, `killEntityWorker`, `DEAD_INDEX`, `TYPE_INDEX` (plus the
+worker-relevant types) - so the bundle stays tiny:
 
 ```ts
 // damage.worker.ts - the worker entry file
@@ -274,6 +280,34 @@ The same applies to any module the worker file pulls in: an update function that
 or `killEntityWorker` should import them from `/worker` too. Type-only imports (`EntityUpdateFunction`,
 `ComponentSystemWorld`, ...) can come from either path since types are erased, and main-thread code
 (`ComponentSystem`, `BaseWorld`, `EntityFactory`, ...) keeps importing from the package root.
+
+### Reading an entity's type in a worker
+
+The `entity` component carries the entity's `type` in shared memory as a pointer, so a worker can resolve it
+back to a string. Pull `entity` into the system's query (its block only reaches the worker if it is `required`
+or `optional`), read the pointer at `TYPE_INDEX`, and hand it to `world.getString` — the framework injects that
+resolver on `world` before every run:
+
+```ts
+import { TYPE_INDEX } from '@daneren2005/shared-memory-ecs/worker';
+import type { EntityUpdateFunction } from '@daneren2005/shared-memory-ecs/worker';
+
+const update: EntityUpdateFunction<Components, { entity: Uint32Array }> = (world, entityId, components) => {
+	const type = world.getString(components.entity[TYPE_INDEX]); // e.g. "Space Ship"
+	// ...branch on type, etc.
+};
+
+class TypedSystem extends ComponentSystem<Components, { entity: Uint32Array }> {
+	constructor(world: BaseWorld<Components>) {
+		super(world, { name: 'TypedSystem', required: ['entity'], updateFunction: update, getWorker: () => new Worker(/* ... */) });
+	}
+}
+```
+
+`world.getString(pointer)` is a Map lookup before it ever rebuilds the string from memory, and returns `''` for
+the empty type or a pointer whose buffer has not synced to the worker yet. This works identically on the
+main-thread fallback. It is not limited to type — any pointer to a `ConstantString` (via `world.constantStrings`
+on the main thread) resolves the same way.
 
 ### Reporting back to the main thread
 

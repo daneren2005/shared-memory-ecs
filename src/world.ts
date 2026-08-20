@@ -1,7 +1,9 @@
 import { EventEmitter } from 'eventemitter3';
 import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
+import type { GrowBufferData } from '@daneren2005/shared-memory-objects/memory-heap';
 import { MAX_BYTE_OFFSET_LENGTH } from '@daneren2005/shared-memory-objects/utils/pointer';
 import MemoryComponent from './memory-component';
+import ConstantStringCache from './constant-string-cache';
 import type BaseEntity from './entity';
 import type System from './systems/system';
 import EntitySystem from './systems/entity-system';
@@ -47,6 +49,8 @@ export default class BaseWorld<
 	Cfg = EntityConfigOf<R>,
 > extends EventEmitter {
 	heap: MemoryHeap;
+	// Interns entity type names (and any other constant strings) in the heap
+	constantStrings: ConstantStringCache;
 	registry: RegisteredComponentRegistry<C> & { entity: RegisteredComponentDefinition<EntityComponent> };
 	factory: EntityFactory<C, Cfg>;
 
@@ -74,6 +78,9 @@ export default class BaseWorld<
 		super();
 
 		this.heap = new MemoryHeap({ bufferSize: options.heapSize ?? DEFAULT_HEAP_SIZE });
+		this.constantStrings = new ConstantStringCache(this.heap);
+		// A grown buffer must reach every worker's reconstructed heap so pointers into it still resolve.
+		this.heap.addOnGrowBufferHandlers((data: GrowBufferData) => this.emit('grow-buffer', data));
 
 		const inputRegistry = { ...registry, entity: entityDefinition } as ComponentRegistry<C> & { entity: typeof entityDefinition };
 		const registry_: Record<string, RegisteredComponentDefinition<BaseComponent>> = {};
@@ -134,6 +141,12 @@ export default class BaseWorld<
 			}
 			this.systems.forEach(system => system.clear());
 			this.consolidateFreeBuffersForReload();
+		}
+
+		// Intern a constant string for every type the factory knows, so a worker can resolve any type - even one no
+		// currently-loaded entity uses. Deduped, so the types actually loaded below cost nothing extra.
+		for(let type of Object.keys(this.factory.configs)) {
+			this.constantStrings.getOrCreate(type);
 		}
 
 		const entities = config.entities.map(entityConfig => this.loadEntity(entityConfig, false));

@@ -5,7 +5,7 @@ export { default as createComponentWorker } from './systems/workers/create-compo
 export type { ComponentWorkerScope } from './systems/workers/create-component-worker';
 export { default as createEntityWorker } from './actions/create-entity-worker';
 export { default as killEntityWorker } from './actions/kill-entity-worker';
-export { DEAD_INDEX } from './entity-component';
+export { DEAD_INDEX, TYPE_INDEX } from './entity-component';
 
 export type { default as ComponentWorkerMessage } from './systems/workers/component-worker-message';
 export type { EntityEvent, SystemEvents } from './systems/workers/component-worker-message';

@@ -2,6 +2,7 @@ import WebWorker from './web-worker';
 import { applyQueryDelta } from './apply-query-delta';
 import type ComponentWorkerMessage from './component-worker-message';
 import type { EntityEvent, SystemEvents } from './component-worker-message';
+import type ConstantStringCache from '../../constant-string-cache';
 import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 
@@ -12,10 +13,13 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 	private queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
 	// Mirrors createComponentWorker: updateFunction.init's result, merged onto `world` each run.
 	private worldExtension: Partial<W> | undefined;
+	// Running on the main thread, this shares the world's cache directly
+	private constantStrings?: ConstantStringCache;
 
-	constructor(updateFunction: EntityUpdateFunction<C, T, W, D>) {
+	constructor(updateFunction: EntityUpdateFunction<C, T, W, D>, constantStrings?: ConstantStringCache) {
 		super();
 		this.updateFunction = updateFunction;
+		this.constantStrings = constantStrings;
 	}
 
 	postMessage(message: ComponentWorkerMessage<W, D>): void {
@@ -36,6 +40,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 			if(this.worldExtension) {
 				Object.assign(message.world, this.worldExtension);
 			}
+			message.world.getString = (pointer: number) => this.constantStrings?.getString(pointer) ?? '';
 			// Timed like the real worker so a forceMainThread system reports a real run cost, not zero.
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];

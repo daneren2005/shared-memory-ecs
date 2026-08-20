@@ -1,5 +1,7 @@
+import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
 import type ComponentWorkerMessage from './component-worker-message';
 import type { EntityEvent, SystemEvents } from './component-worker-message';
+import ConstantStringCache from '../../constant-string-cache';
 import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 import { applyQueryDelta } from './apply-query-delta';
@@ -22,6 +24,9 @@ export default function createComponentWorker<
 	const queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
 	// What updateFunction.init returned: persistent state (e.g. a seeded RNG) merged onto `world` each run.
 	let worldExtension: Partial<W> | undefined;
+	let heap: MemoryHeap | undefined;
+	let stringCache: ConstantStringCache | undefined;
+	const getString = (pointer: number): string => stringCache?.getString(pointer) ?? '';
 
 	scope.onmessage = function(e) {
 		const message = e.data as ComponentWorkerMessage<W, D>;
@@ -31,10 +36,16 @@ export default function createComponentWorker<
 				type: 'init-complete',
 			});
 		} else if(message.type === 'load') {
+			if(message.heap) {
+				heap = new MemoryHeap(message.heap);
+				stringCache = new ConstantStringCache(heap);
+			}
 			worldExtension = updateFunction.init?.(message.data) ?? undefined;
 			postMessageTyped(scope, {
 				type: 'loaded',
 			});
+		} else if(message.type === 'grow-buffer') {
+			heap?.addSharedBuffer(message.buffer);
 		} else if(message.type === 'reset') {
 			// Drop the persistent lists so a reused world starts empty; worldExtension is refreshed by the next load.
 			entities = [];
@@ -46,6 +57,7 @@ export default function createComponentWorker<
 			if(worldExtension) {
 				Object.assign(message.world, worldExtension);
 			}
+			message.world.getString = getString;
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
 			let systemEvents: SystemEvents = {};

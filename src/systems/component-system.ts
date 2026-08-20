@@ -1,3 +1,4 @@
+import type { GrowBufferData } from '@daneren2005/shared-memory-objects/memory-heap';
 import type BaseWorld from '../world';
 import type BaseEntity from '../entity';
 import type { BaseComponent, ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from '../component-definition';
@@ -58,8 +59,12 @@ export default abstract class ComponentSystem<
 		if(!options.forceMainThread && typeof globalThis.Worker !== 'undefined' && typeof globalThis.SharedArrayBuffer !== 'undefined') {
 			this.worker = options.getWorker();
 			this.isWorkerThread = true;
+			// Forward heap growth so the worker's reconstructed heap can resolve pointers into new buffers.
+			world.on('grow-buffer', (buffer: GrowBufferData) => {
+				this.worker.postMessage({ type: 'grow-buffer', buffer });
+			});
 		} else {
-			this.worker = new ComponentWebWorker(options.updateFunction);
+			this.worker = new ComponentWebWorker(options.updateFunction, world.constantStrings);
 			this.isWorkerThread = false;
 		}
 
@@ -155,6 +160,8 @@ export default abstract class ComponentSystem<
 		const message: ComponentWorkerMessage<W, D> = {
 			type: 'load',
 			data: this.options.getInitData?.(),
+			// Only a real worker needs the buffers to rebuild a heap
+			heap: this.isWorkerThread ? this.world.heap.getSharedMemory() : undefined,
 		};
 		this.worker.postMessage(message);
 
@@ -404,6 +411,7 @@ interface MembershipDelta<C extends ComponentMap> {
 export interface ComponentSystemWorld {
 	gameTime: number
 	elapsedTime: number
+	getString(pointer: number): string
 }
 export type CreateEntityConfig = Record<string, unknown>;
 

@@ -1,3 +1,4 @@
+import type { MemoryHeapMemory, GrowBufferData } from '@daneren2005/shared-memory-objects/memory-heap';
 import type { ComponentSystemWorld, QueryDelta } from '../component-system';
 
 interface InitMessage {
@@ -12,6 +13,13 @@ interface InitCompleteMessage {
 interface LoadMessage<D = unknown> {
 	type: 'load'
 	data?: D
+	heap?: MemoryHeapMemory
+}
+
+// A buffer the heap grew after load: forwarded so the worker's reconstructed heap keeps resolving new pointers.
+interface GrowBufferMessage {
+	type: 'grow-buffer'
+	buffer: GrowBufferData
 }
 
 interface LoadedMessage {
@@ -53,5 +61,5 @@ interface EntityEventsMessage {
 }
 
 type ComponentWorkerMessage<W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> =
-	InitMessage | InitCompleteMessage | LoadMessage<D> | LoadedMessage | ResetMessage | RunUpdateMessage<W> | EntityEventsMessage;
+	InitMessage | InitCompleteMessage | LoadMessage<D> | LoadedMessage | ResetMessage | GrowBufferMessage | RunUpdateMessage<W> | EntityEventsMessage;
 export default ComponentWorkerMessage;

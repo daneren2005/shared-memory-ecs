@@ -1,4 +1,4 @@
-import { ComponentSystem } from '../../index';
+import { ComponentSystem, TYPE_INDEX } from '../../index';
 import type { BaseEntity, ComponentSystemQuery, System } from '../../index';
 import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
 import { eidsOf, listOf } from '../../__tests__/fixtures/entity-collections';
@@ -6,6 +6,7 @@ import { damageUpdate, DAMAGED_ENTITIES_EVENT, type DamageWorld, type DamageInit
 import { killUpdate, KILLED_ENTITIES_EVENT } from '../../__tests__/fixtures/kill-update';
 import { spawnUpdate } from '../../__tests__/fixtures/spawn-update';
 import { queryTargetUpdate } from '../../__tests__/fixtures/query-target-update';
+import { typeReadUpdate, TYPE_READ_EVENT } from '../../__tests__/fixtures/type-read-update';
 
 // Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.
 const NOOP_WORKER_URL = new URL('../../__tests__/fixtures/noop.worker.ts', import.meta.url);
@@ -13,6 +14,7 @@ const DAMAGE_WORKER_URL = new URL('../../__tests__/fixtures/damage.worker.ts', i
 const KILL_WORKER_URL = new URL('../../__tests__/fixtures/kill.worker.ts', import.meta.url);
 const SPAWN_WORKER_URL = new URL('../../__tests__/fixtures/spawn.worker.ts', import.meta.url);
 const QUERY_TARGET_WORKER_URL = new URL('../../__tests__/fixtures/query-target.worker.ts', import.meta.url);
+const TYPE_READ_WORKER_URL = new URL('../../__tests__/fixtures/type-read.worker.ts', import.meta.url);
 
 // Every test runs against both backends: 'main-thread' (ComponentWebWorker) and 'worker' (a real worker
 // module). Both must produce identical observable behavior.
@@ -264,6 +266,34 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			await flush();
 
 			expect(damaged).toEqual([[1, 99]]);
+		});
+
+		it('resolves each entity\'s type from its shared block via world.getString', async () => {
+			let system = useSystem(new TypeReadSystem(world, mode));
+			await initSystem(system);
+
+			// Two entities share a type (one interned ConstantString) and a third differs.
+			let ship1 = createEntity({ type: 'Space Ship', maxHealth: 10 });
+			let ship2 = createEntity({ type: 'Space Ship', maxHealth: 10 });
+			let miner = createEntity({ type: 'Miner', maxHealth: 10 });
+
+			// The interning promise: identical types point at the same allocation (equal pointers in the block).
+			const typePointer = (entity: BaseEntity<Components>) =>
+				world.registry.entity.memoryComponent.getBlock(entity.components.entity.index)[TYPE_INDEX];
+			expect(typePointer(ship1)).toEqual(typePointer(ship2));
+			expect(typePointer(ship1)).not.toEqual(typePointer(miner));
+
+			let seen = new Map<number, string>();
+			[ship1, ship2, miner].forEach(entity => {
+				entity.on(TYPE_READ_EVENT, (type: string) => seen.set(entity.eid, type));
+			});
+
+			system.run(16);
+			await flush();
+
+			expect(seen.get(ship1.eid)).toEqual('Space Ship');
+			expect(seen.get(ship2.eid)).toEqual('Space Ship');
+			expect(seen.get(miner.eid)).toEqual('Miner');
 		});
 
 		// PerformanceTiming is driven off these two events, so both backends must report a run.
@@ -625,6 +655,18 @@ class QueryTargetSystem extends ComponentSystem<Components, { movement: Float32A
 					optional: ['entity'],
 				},
 			},
+		});
+	}
+}
+
+class TypeReadSystem extends ComponentSystem<Components, { entity: Uint32Array }> {
+	constructor(world: TestWorld, mode: Mode) {
+		super(world, {
+			name: 'TypeReadSystem',
+			required: ['entity'],
+			updateFunction: typeReadUpdate,
+			forceMainThread: mode === 'main-thread',
+			getWorker: () => new Worker(TYPE_READ_WORKER_URL, { type: 'module' }),
 		});
 	}
 }
