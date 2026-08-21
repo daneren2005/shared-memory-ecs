@@ -27,13 +27,13 @@ Run type-check and lint after every edit (AGENTS.md).
 | --- | --- |
 | `index.ts` | Public barrel (main-thread entry). |
 | `worker.ts` | `/worker` subpath barrel — only what runs in a worker, keeps worker bundles tiny. |
-| `world.ts` | `BaseWorld<R,C,Cfg>`: owns the heap, the `constantStrings` cache, the registry (one `MemoryComponent` per component), `entities` (Map by eid), systems, the update loop, clocks (`gameTime`/`playerTime`/`timeScale`/`paused`), add/remove-entity → system wiring, the deferred component-free buffers (`deferComponentMemoryFree`/`notifySystemRunCompleted`), and reuse via `load` / async `clear` gated by the `pristine` flag. Re-emits the heap's buffer-growth as a `grow-buffer` event so worker heaps stay in sync. |
-| `entity.ts` | `BaseEntity<C,Cfg>`: eid + component bag; `load`/`save`/`finishLoading`, `loadComponent`/`removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. `removeComponent`/`deleteAllComponentMemory` call the definition's optional `free(component)` (release extra heap the component owns) then defer the block free to the world rather than freeing inline. EventEmitter. |
+| `world.ts` | `BaseWorld<R,C,Cfg>`: owns the heap, the `constantStrings` cache, the heap-backed atomic eid counter (`allocateEid`, unique across threads), the registry (one `MemoryComponent` per component), `entities` (Map by eid), systems, the update loop, clocks (`gameTime`/`playerTime`/`timeScale`/`paused`), add/remove-entity → system wiring, the deferred component-free buffers (`deferComponentMemoryFree`/`notifySystemRunCompleted`), and reuse via `load` / async `clear` gated by the `pristine` flag. `getSharedComponentMemory()` ships each pool + the eid counter to workers. Re-emits the heap's buffer-growth as a `grow-buffer` event, and `addGrownBuffer()` adopts a buffer a worker grew (then fans it out) so worker heaps stay in sync both ways. |
+| `entity.ts` | `BaseEntity<C,Cfg>`: eid (from `world.allocateEid()`, a heap atomic — unique across threads) + component bag; `load`/`save`/`finishLoading`, `loadComponent`/`removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. `removeComponent`/`deleteAllComponentMemory` call the definition's optional `free(component)` (release extra heap the component owns) then defer the block free to the world rather than freeing inline. EventEmitter. |
 | `entity-component.ts` | The always-present `entity` component (`type`, `dead`, `isStatic`), all worker-visible in memory. `type` is stored as a pointer to an interned `ConstantString` (see `constant-string-cache.ts`); the `type` accessor resolves it through `world.constantStrings`. Exports `DEAD_INDEX`, `STATIC_INDEX`, `TYPE_INDEX`, `entityDefinition`. |
 | `constant-string-cache.ts` | `ConstantStringCache`: interns immutable strings (from `@daneren2005/shared-memory-objects`'s `ConstantString`) in the heap and resolves a stored pointer back to its string. `getOrCreate(value)` dedupes so identical values share one allocation; `getString(pointer)` is a Map hit before rebuilding from memory. The main thread creates+interns (`world.constantStrings`); each worker reconstructs its own cache over the same buffers to resolve pointers. |
 | `entity-factory.ts` | `EntityFactory<C,Cfg>`: maps entity `type` → base config template; layers caller config over it. `loadEntity` builds + adds to world. Override `createEntity` for subclass-per-type. |
 | `component-definition.ts` | All the component/registry types: `ComponentDefinition` (incl. the optional `free(component)` teardown hook — release extra heap the component allocated in `load`), `BaseComponent`, `ComponentMap`, `ComponentRegistry`, `RegisteredComponentDefinition`, and the derivations `ComponentsOf` / `EntityConfigOf` that infer `C`/`Cfg` from a registry. |
-| `memory-component.ts` | `MemoryComponent`: a pool of same-sized blocks in the heap (`create`/`getBlock`/`get`/`set`/`delete`/`clear`). Backing type is `ComponentTypedArray`. |
+| `memory-component.ts` | `MemoryComponent`: a pool of same-sized blocks in the heap (`create`/`getBlock`/`get`/`set`/`delete`/`clear`). Backed by a `SharedPool` (all bookkeeping in the heap), so a worker can reconstruct a handle over the same pool (`MemoryComponent.fromSharedMemory` / owner's `getSharedMemory()`) and allocate/read blocks off-thread — lockless except a spin-lock guarding rare chunk growth. Backing type is `ComponentTypedArray`. |
 | `performance-timing.ts` | `PerformanceTiming`: hooks world events, emits `stats-updated` snapshots (`update` / per-system `run`+`events` / `events`). Non-invasive. |
 
 ### Systems (`src/systems/`)
@@ -115,6 +115,15 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   re-ships the heap; buffers the heap grows afterward reach the worker as `grow-buffer` messages so later pointers
   still resolve. The main-thread fallback
   (`ComponentWebWorker`) shares the world's cache directly and ignores both the shipped heap and `grow-buffer`.
+- **Off-thread allocation foundation:** the `load` message also ships `sharedMemory` (`getSharedComponentMemory()`):
+  one `SharedPoolMemory` per component + the eid counter's `SharedAllocatedMemory`. A real worker reconstructs a
+  `name → MemoryComponent` registry over the same pools and injects a `world.allocate` (`WorkerAllocator`) each run:
+  `allocateEid()` (heap atomic) and `allocateComponentBlock(name, values)` (pushes into the shared pool). The fallback
+  mirrors this over `world.registry`/`allocateEid` directly. When a worker's allocation grows the heap, it posts
+  `grow-buffer-from-worker`; `ComponentSystem` forwards it to `world.addGrownBuffer`, which adopts the buffer and
+  re-emits `grow-buffer` to fan it out to sibling workers. Growth is idempotent: neither the world nor a worker
+  replaces a buffer position it already holds (the originating worker ignores the echo of its own buffer). This is the
+  substrate for worker-side entity creation; the entity-wiring/adopt layer on top is not built yet.
 - **Worker update-function hooks:** besides the per-entity body, an `updateFunction` may carry `init`,
   `preRun`, and `entityRemoved`. `init(data)` runs on every `finishLoading` — `data` comes from the
   system's `getInitData()` (typed via the `D` param) — and its returned `Partial<W>` is merged onto `world`

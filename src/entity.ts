@@ -4,8 +4,6 @@ import type { ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry 
 import type { EntityComponent } from './entity-component';
 
 export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any> extends EventEmitter {
-	static eidCounter = 1;
-
 	readonly eid: number;
 	config?: Cfg;
 
@@ -17,7 +15,7 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 		super();
 
 		this.world = world;
-		this.eid = BaseEntity.eidCounter++;
+		this.eid = world.allocateEid();
 		this.loadComponent('entity', config ?? {}, false);
 		if(config) {
 			this.load(config);

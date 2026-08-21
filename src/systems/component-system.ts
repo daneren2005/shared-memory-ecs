@@ -64,7 +64,7 @@ export default abstract class ComponentSystem<
 				this.worker.postMessage({ type: 'grow-buffer', buffer });
 			});
 		} else {
-			this.worker = new ComponentWebWorker(options.updateFunction, world.constantStrings);
+			this.worker = new ComponentWebWorker(options.updateFunction, world);
 			this.isWorkerThread = false;
 		}
 
@@ -85,6 +85,9 @@ export default abstract class ComponentSystem<
 					this.loadingPromise.resolve();
 					this.loadingPromise = null;
 				}
+			} else if(message.type === 'grow-buffer-from-worker') {
+				// A buffer this worker grew while allocating: adopt into the main heap and fan out to sibling workers.
+				this.world.addGrownBuffer(message.buffer);
 			} else if(message.type === 'run-complete') {
 				// A reply from a run that started before a clear(): the world it ran over is gone, so drop it whole.
 				if(message.generation !== this.generation) {
@@ -160,8 +163,9 @@ export default abstract class ComponentSystem<
 		const message: ComponentWorkerMessage<W, D> = {
 			type: 'load',
 			data: this.options.getInitData?.(),
-			// Only a real worker needs the buffers to rebuild a heap
+			// Only a real worker needs the buffers to rebuild a heap, plus the pools + eid counter to allocate off-thread.
 			heap: this.isWorkerThread ? this.world.heap.getSharedMemory() : undefined,
+			sharedMemory: this.isWorkerThread ? this.world.getSharedComponentMemory() : undefined,
 		};
 		this.worker.postMessage(message);
 
@@ -408,10 +412,20 @@ interface MembershipDelta<C extends ComponentMap> {
 	removed: Set<number>
 }
 
+// Low-level off-thread allocation primitives, injected onto the worker `world` each run. `allocateEid` mints a
+// heap-unique id; `allocateComponentBlock` pushes a block into a component's shared pool and returns its index.
+// These are the foundation a future worker-side createEntity builds on (allocate + write blocks, then report the
+// eid/indexes back for the main thread to adopt).
+export interface WorkerAllocator {
+	allocateEid(): number
+	allocateComponentBlock(name: string, values: Array<number>): number
+}
+
 export interface ComponentSystemWorld {
 	gameTime: number
 	elapsedTime: number
 	getString(pointer: number): string
+	allocate?: WorkerAllocator
 }
 export type CreateEntityConfig = Record<string, unknown>;
 

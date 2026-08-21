@@ -1,4 +1,5 @@
 import type { MemoryHeapMemory, GrowBufferData } from '@daneren2005/shared-memory-objects/memory-heap';
+import type { WorldSharedMemory } from '../../world';
 import type { ComponentSystemWorld, QueryDelta } from '../component-system';
 
 interface InitMessage {
@@ -9,16 +10,25 @@ interface InitCompleteMessage {
 	type: 'init-complete'
 }
 
-// Sent on every (re)load: carries the system's init data and runs updateFunction.init.
+// Sent on every (re)load: carries the system's init data and runs updateFunction.init. `sharedMemory` lets a real
+// worker reconstruct handles over the world's component pools + eid counter (for off-thread allocation).
 interface LoadMessage<D = unknown> {
 	type: 'load'
 	data?: D
 	heap?: MemoryHeapMemory
+	sharedMemory?: WorldSharedMemory
 }
 
 // A buffer the heap grew after load: forwarded so the worker's reconstructed heap keeps resolving new pointers.
 interface GrowBufferMessage {
 	type: 'grow-buffer'
+	buffer: GrowBufferData
+}
+
+// A buffer a worker grew itself (allocating off-thread): reported back so the main thread adopts it and fans it out
+// to sibling workers.
+interface GrowBufferFromWorkerMessage {
+	type: 'grow-buffer-from-worker'
 	buffer: GrowBufferData
 }
 
@@ -61,5 +71,5 @@ interface EntityEventsMessage {
 }
 
 type ComponentWorkerMessage<W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> =
-	InitMessage | InitCompleteMessage | LoadMessage<D> | LoadedMessage | ResetMessage | GrowBufferMessage | RunUpdateMessage<W> | EntityEventsMessage;
+	InitMessage | InitCompleteMessage | LoadMessage<D> | LoadedMessage | ResetMessage | GrowBufferMessage | GrowBufferFromWorkerMessage | RunUpdateMessage<W> | EntityEventsMessage;
 export default ComponentWorkerMessage;

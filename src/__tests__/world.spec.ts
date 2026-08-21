@@ -1,6 +1,28 @@
+import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
 import { System, killEntity, EntityFactory } from '../index';
 import { createTestWorld, type Components, type Config, type TestWorld } from './fixtures/components';
 import { listOf } from './fixtures/entity-collections';
+
+describe('world eid allocation', () => {
+	it('hands out unique ids and stays consistent across a cloned-heap counter', () => {
+		let world = createTestWorld();
+		expect(world.allocateEid()).toEqual(1);
+		expect(world.allocateEid()).toEqual(2);
+
+		// A worker holds a counter reconstructed over the same shared buffers; interleaved allocation must never collide.
+		let cloneHeap = new MemoryHeap(world.heap.getSharedMemory());
+		let shared = world.getSharedComponentMemory().eidCounter;
+		let workerCounter = cloneHeap.getSharedAlloc(shared)!;
+		const workerAllocate = () => Atomics.add(workerCounter.data, 0, 1) + 1;
+
+		let ids = new Set<number>();
+		for(let i = 0; i < 100; i++) {
+			ids.add(world.allocateEid());
+			ids.add(workerAllocate());
+		}
+		expect(ids.size).toEqual(200);
+	});
+});
 
 describe('world load', () => {
 	it('interns a constant string for every factory type, even ones no loaded entity uses', () => {

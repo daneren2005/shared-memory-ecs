@@ -1,7 +1,9 @@
 import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
+import type AllocatedMemory from '@daneren2005/shared-memory-objects/allocated-memory';
 import type ComponentWorkerMessage from './component-worker-message';
 import type { EntityEvent, SystemEvents } from './component-worker-message';
 import ConstantStringCache from '../../constant-string-cache';
+import MemoryComponent from '../../memory-component';
 import type { ComponentMap } from '../../component-definition';
 import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
 import { applyQueryDelta } from './apply-query-delta';
@@ -26,6 +28,9 @@ export default function createComponentWorker<
 	let worldExtension: Partial<W> | undefined;
 	let heap: MemoryHeap | undefined;
 	let stringCache: ConstantStringCache | undefined;
+	// Reconstructed handles over the world's shared state, for future off-thread entity allocation.
+	let registry: { [name: string]: MemoryComponent } = {};
+	let eidCounter: AllocatedMemory | undefined;
 	const getString = (pointer: number): string => stringCache?.getString(pointer) ?? '';
 
 	scope.onmessage = function(e) {
@@ -39,13 +44,28 @@ export default function createComponentWorker<
 			if(message.heap) {
 				heap = new MemoryHeap(message.heap);
 				stringCache = new ConstantStringCache(heap);
+				// Report any buffer this worker grows (while allocating off-thread) back to the main thread, which adopts
+				// it and fans it out to sibling workers.
+				heap.addOnGrowBufferHandlers(buffer => postMessageTyped(scope, { type: 'grow-buffer-from-worker', buffer }));
+			}
+			if(heap && message.sharedMemory) {
+				registry = {};
+				for(const name of Object.keys(message.sharedMemory.components)) {
+					registry[name] = MemoryComponent.fromSharedMemory(heap, message.sharedMemory.components[name]);
+				}
+				eidCounter = heap.getSharedAlloc(message.sharedMemory.eidCounter);
 			}
 			worldExtension = updateFunction.init?.(message.data) ?? undefined;
 			postMessageTyped(scope, {
 				type: 'loaded',
 			});
 		} else if(message.type === 'grow-buffer') {
-			heap?.addSharedBuffer(message.buffer);
+			// Never replace a buffer this worker already holds: the main thread fans a worker-grown buffer back out to
+			// every worker (including the one that grew it), and overwriting our own live MemoryBuffer would discard its
+			// allocation bookkeeping. The SharedArrayBuffer at that position is already the same one.
+			if(heap && heap.buffers[message.buffer.bufferPosition] === undefined) {
+				heap.addSharedBuffer(message.buffer);
+			}
 		} else if(message.type === 'reset') {
 			// Drop the persistent lists so a reused world starts empty; worldExtension is refreshed by the next load.
 			entities = [];
@@ -58,6 +78,10 @@ export default function createComponentWorker<
 				Object.assign(message.world, worldExtension);
 			}
 			message.world.getString = getString;
+			message.world.allocate = {
+				allocateEid: () => eidCounter ? Atomics.add(eidCounter.data, 0, 1) + 1 : 0,
+				allocateComponentBlock: (name, values) => registry[name].create(values),
+			};
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
 			let systemEvents: SystemEvents = {};

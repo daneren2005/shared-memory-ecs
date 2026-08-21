@@ -1,6 +1,9 @@
 import { EventEmitter } from 'eventemitter3';
 import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
 import type { GrowBufferData } from '@daneren2005/shared-memory-objects/memory-heap';
+import type AllocatedMemory from '@daneren2005/shared-memory-objects/allocated-memory';
+import type { SharedAllocatedMemory } from '@daneren2005/shared-memory-objects/allocated-memory';
+import type { SharedPoolMemory } from '@daneren2005/shared-memory-objects/shared-pool';
 import { MAX_BYTE_OFFSET_LENGTH } from '@daneren2005/shared-memory-objects/utils/pointer';
 import MemoryComponent from './memory-component';
 import ConstantStringCache from './constant-string-cache';
@@ -43,6 +46,12 @@ export interface WorldConfig<Cfg = any> {
 	timeScale?: number
 }
 
+// Shipped to a worker so it can reconstruct handles over this world's shared state (see getSharedComponentMemory).
+export interface WorldSharedMemory {
+	components: { [name: string]: SharedPoolMemory }
+	eidCounter: SharedAllocatedMemory
+}
+
 export default class BaseWorld<
 	R extends ComponentDefinitionMap = ComponentDefinitionMap,
 	C extends ComponentMap = ComponentsOf<R>,
@@ -51,6 +60,9 @@ export default class BaseWorld<
 	heap: MemoryHeap;
 	// Interns entity type names (and any other constant strings) in the heap
 	constantStrings: ConstantStringCache;
+	// Single heap-backed counter every thread bumps atomically, so eids stay unique whether an entity is created on
+	// the main thread or inside a worker.
+	private eidCounter: AllocatedMemory;
 	registry: RegisteredComponentRegistry<C> & { entity: RegisteredComponentDefinition<EntityComponent> };
 	factory: EntityFactory<C, Cfg>;
 
@@ -79,6 +91,7 @@ export default class BaseWorld<
 
 		this.heap = new MemoryHeap({ bufferSize: options.heapSize ?? DEFAULT_HEAP_SIZE });
 		this.constantStrings = new ConstantStringCache(this.heap);
+		this.eidCounter = this.heap.allocUI32(1);
 		// A grown buffer must reach every worker's reconstructed heap so pointers into it still resolve.
 		this.heap.addOnGrowBufferHandlers((data: GrowBufferData) => this.emit('grow-buffer', data));
 
@@ -95,6 +108,33 @@ export default class BaseWorld<
 
 		this.factory = options.factory ?? new EntityFactory<C, Cfg>();
 		this.factory.world = this;
+	}
+
+	// Returns a fresh, unique entity id. Backed by a heap atomic so a worker allocating an entity gets an id that can
+	// never collide with one the main thread (or another worker) hands out. First id is 1, matching the old counter.
+	allocateEid(): number {
+		return Atomics.add(this.eidCounter.data, 0, 1) + 1;
+	}
+	// Everything a worker needs to reconstruct handles over this world's shared state: one SharedPoolMemory per
+	// registered component (so it can allocate/read blocks) plus the eid counter (so it can mint unique ids).
+	getSharedComponentMemory(): WorldSharedMemory {
+		const components: { [name: string]: SharedPoolMemory } = {};
+		for(let name of Object.keys(this.registry)) {
+			components[name] = this.registry[name as keyof typeof this.registry].memoryComponent.getSharedMemory();
+		}
+		return {
+			components,
+			eidCounter: this.eidCounter.getSharedMemory(),
+		};
+	}
+	// A buffer that was grown inside a worker: adopt it into the main heap (if not already present) and fan it out to
+	// every other worker so their heaps can resolve pointers into it. The heap's BUFFER_COUNT is authoritative, so
+	// re-adding an already-known position is a harmless overwrite of the same SharedArrayBuffer.
+	addGrownBuffer(data: GrowBufferData) {
+		if(this.heap.buffers[data.bufferPosition] === undefined) {
+			this.heap.addSharedBuffer(data);
+		}
+		this.emit('grow-buffer', data);
 	}
 
 	async init() {

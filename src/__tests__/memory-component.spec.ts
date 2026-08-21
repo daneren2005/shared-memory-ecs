@@ -35,6 +35,36 @@ describe('memory component', () => {
 		expect(component.getBlock(2).byteOffset).toEqual(startDataBlock.byteOffset);
 	});
 
+	it('reconstructs a handle over an existing pool from getSharedMemory', () => {
+		let heap = new MemoryHeap({ bufferSize: 100 * 1024 });
+		let owner = new MemoryComponent(heap, Int32Array, 2);
+		let index = owner.create([7, 8]);
+
+		// Same heap, second handle over the same pool - mirrors a worker rebuilding from the shipped SharedPoolMemory.
+		let reconstructed = MemoryComponent.fromSharedMemory<Int32Array>(heap, owner.getSharedMemory());
+		expect([...reconstructed.getBlock(index)]).toEqual([7, 8]);
+
+		// A block allocated through the reconstructed handle is visible to the owner, and vice versa.
+		let workerIndex = reconstructed.create([11, 12]);
+		expect([...owner.getBlock(workerIndex)]).toEqual([11, 12]);
+		owner.set(workerIndex, 0, 99);
+		expect(reconstructed.get(workerIndex, 0)).toEqual(99);
+	});
+
+	it('reconstructs across a heap cloned from shared buffers', () => {
+		let heap = new MemoryHeap({ bufferSize: 100 * 1024 });
+		let owner = new MemoryComponent(heap, Int32Array, 2);
+		let index = owner.create([1, 2]);
+
+		// A cloned heap over the same SharedArrayBuffers is what a real worker holds.
+		let cloneHeap = new MemoryHeap(heap.getSharedMemory());
+		let reconstructed = MemoryComponent.fromSharedMemory<Int32Array>(cloneHeap, owner.getSharedMemory());
+		expect([...reconstructed.getBlock(index)]).toEqual([1, 2]);
+
+		let workerIndex = reconstructed.create([3, 4]);
+		expect([...owner.getBlock(workerIndex)]).toEqual([3, 4]);
+	});
+
 	it('multiple internal vectors for large number of entities', () => {
 		let heap = new MemoryHeap({ bufferSize: 10 * 1024 });
 		let component = new MemoryComponent(heap, Float32Array, 5);

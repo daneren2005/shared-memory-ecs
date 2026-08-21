@@ -2,9 +2,12 @@ import WebWorker from './web-worker';
 import { applyQueryDelta } from './apply-query-delta';
 import type ComponentWorkerMessage from './component-worker-message';
 import type { EntityEvent, SystemEvents } from './component-worker-message';
-import type ConstantStringCache from '../../constant-string-cache';
-import type { ComponentMap } from '../../component-definition';
-import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
+import type BaseWorld from '../../world';
+import type { ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from '../../component-definition';
+import type {
+	ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents,
+	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerAllocator,
+} from '../component-system';
 
 // Main-thread fallback that runs the update function synchronously, mirroring the real worker's behavior.
 export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> extends WebWorker {
@@ -13,13 +16,19 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 	private queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
 	// Mirrors createComponentWorker: updateFunction.init's result, merged onto `world` each run.
 	private worldExtension: Partial<W> | undefined;
-	// Running on the main thread, this shares the world's cache directly
-	private constantStrings?: ConstantStringCache;
+	// Running on the main thread, this shares the world (its string cache, registry pools, eid counter) directly.
+	private world: BaseWorld<ComponentDefinitionMap, C>;
+	private allocator: WorkerAllocator;
 
-	constructor(updateFunction: EntityUpdateFunction<C, T, W, D>, constantStrings?: ConstantStringCache) {
+	constructor(updateFunction: EntityUpdateFunction<C, T, W, D>, world: BaseWorld<ComponentDefinitionMap, C>) {
 		super();
 		this.updateFunction = updateFunction;
-		this.constantStrings = constantStrings;
+		this.world = world;
+		const registry = world.registry as RegisteredComponentRegistry<C>;
+		this.allocator = {
+			allocateEid: () => world.allocateEid(),
+			allocateComponentBlock: (name, values) => registry[name as keyof C].memoryComponent.create(values),
+		};
 	}
 
 	postMessage(message: ComponentWorkerMessage<W, D>): void {
@@ -40,7 +49,8 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 			if(this.worldExtension) {
 				Object.assign(message.world, this.worldExtension);
 			}
-			message.world.getString = (pointer: number) => this.constantStrings?.getString(pointer) ?? '';
+			message.world.getString = (pointer: number) => this.world.constantStrings.getString(pointer) ?? '';
+			message.world.allocate = this.allocator;
 			// Timed like the real worker so a forceMainThread system reports a real run cost, not zero.
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
