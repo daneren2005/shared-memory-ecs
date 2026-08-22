@@ -1,7 +1,7 @@
 import type { GrowBufferData } from '@daneren2005/shared-memory-objects/memory-heap';
 import type BaseWorld from '../world';
 import type BaseEntity from '../entity';
-import type { BaseComponent, ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from '../component-definition';
+import type { BaseComponent, ComponentDefinitionMap, ComponentMap } from '../component-definition';
 import type { ComponentTypedArray } from '../memory-component';
 import System, { type SystemConfig } from './system';
 import type ComponentWorkerMessage from './workers/component-worker-message';
@@ -64,7 +64,7 @@ export default abstract class ComponentSystem<
 				this.worker.postMessage({ type: 'grow-buffer', buffer });
 			});
 		} else {
-			this.worker = new ComponentWebWorker(options.updateFunction, world);
+			this.worker = new ComponentWebWorker(options.updateFunction, world, !!options.createsEntities);
 			this.isWorkerThread = false;
 		}
 
@@ -114,9 +114,10 @@ export default abstract class ComponentSystem<
 					entity.emit(event.event, ...event.args);
 				});
 
-				// After deaths, so an entity created this run isn't immediately removed.
-				message.created.forEach(config => {
-					this.world.loadEntity(config);
+				// After deaths, so an entity created this run isn't immediately removed. Adopts the blocks the worker
+				// already allocated + wrote, rather than re-creating them.
+				message.created.forEach(descriptor => {
+					this.world.adoptEntity(descriptor);
 				});
 
 				this.world.emit(`system-${this.name}-worker-events-finished`, message.runTime);
@@ -166,6 +167,8 @@ export default abstract class ComponentSystem<
 			// Only a real worker needs the buffers to rebuild a heap, plus the pools + eid counter to allocate off-thread.
 			heap: this.isWorkerThread ? this.world.heap.getSharedMemory() : undefined,
 			sharedMemory: this.isWorkerThread ? this.world.getSharedComponentMemory() : undefined,
+			// Factory templates only go to workers that create entities.
+			factoryConfigs: this.isWorkerThread && this.options.createsEntities ? this.world.factory.configs : undefined,
 		};
 		this.worker.postMessage(message);
 
@@ -256,15 +259,15 @@ export default abstract class ComponentSystem<
 	}
 	private buildComponents(entity: BaseEntity<C>, query: ComponentSystemQuery<C>): T {
 		const components = {} as T;
-		const registry = this.world.registry as RegisteredComponentRegistry<C>;
 		[
 			...query.required,
 			...query.optional ?? [],
 		].forEach(componentName => {
-			const component = entity.components[componentName];
-			const memoryComponent = registry[componentName].memoryComponent;
-			if(component && memoryComponent) {
-				components[componentName] = memoryComponent.getBlock(component.index) as T[typeof componentName];
+			// Reuse the view cached on the accessor at attach: getBlock allocates a fresh subarray every call and an
+			// entity joins many systems, so re-looking it up here per system was a measurable spawn-time cost.
+			const block = entity.components[componentName]?.block;
+			if(block) {
+				components[componentName] = block as T[typeof componentName];
 			}
 		});
 
@@ -426,8 +429,23 @@ export interface ComponentSystemWorld {
 	elapsedTime: number
 	getString(pointer: number): string
 	allocate?: WorkerAllocator
+	// Injected each run on a system registered with createsEntities: builds a WorkerCreatedEntity descriptor from a
+	// factory config (merges the type's template, allocates + writes each component's block). Drives createEntityWorker.
+	buildEntityDescriptor?(config: WorkerCreateEntityConfig): WorkerCreatedEntity
 }
-export type CreateEntityConfig = Record<string, unknown>;
+// What a game passes to createEntityWorker: a factory-style config - the entity `type` plus any overrides layered
+// over that type's factory template. The worker merges template + overrides, then allocates + writes each triggered
+// component's block off-thread via the component's toBlock(config). The "entity" component is built on the main
+// thread when the descriptor is adopted, since interning the type is main-thread-only.
+export type WorkerCreateEntityConfig = { type: string } & { [key: string]: unknown };
+// The result reported back on run-complete: the minted id plus, per game component, the pool index the worker
+// allocated. world.adoptEntity turns this into a real BaseEntity.
+export interface WorkerCreatedEntity {
+	eid: number
+	type: string
+	isStatic?: boolean
+	components: { [name: string]: number }
+}
 
 export interface ComponentSystemCallbacks<C extends ComponentMap = ComponentMap> {
 	entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]): void
@@ -437,7 +455,7 @@ export interface ComponentSystemCallbacks<C extends ComponentMap = ComponentMap>
 	// happens to most entities every run; carries no args (values are already in shared memory).
 	emitSystemEvent(event: string, entityId: number): void
 	entityDied(entityId: number): void
-	createEntity(config: CreateEntityConfig): void
+	createEntity(entity: WorkerCreatedEntity): void
 }
 
 export interface ComponentSystemQuery<C extends ComponentMap = ComponentMap> {
@@ -457,6 +475,10 @@ export interface ComponentSystemConfig<
 	getWorker: () => Worker
 	forceMainThread?: boolean
 	getInitData?: () => D
+	// Opt in to worker-side entity creation (createEntityWorker). When set, the factory configs are shipped to this
+	// system's worker on load so it can merge templates; the worker entry must also pass the component registry to
+	// createComponentWorker so it has each component's toBlock(). Only systems that create entities need either.
+	createsEntities?: boolean
 
 	queries?: { [key: string]: ComponentSystemQuery<C> }
 }

@@ -7,10 +7,11 @@ import type { SharedPoolMemory } from '@daneren2005/shared-memory-objects/shared
 import { MAX_BYTE_OFFSET_LENGTH } from '@daneren2005/shared-memory-objects/utils/pointer';
 import MemoryComponent from './memory-component';
 import ConstantStringCache from './constant-string-cache';
-import type BaseEntity from './entity';
+import BaseEntity from './entity';
 import type System from './systems/system';
 import EntitySystem from './systems/entity-system';
 import ComponentSystem from './systems/component-system';
+import type { WorkerCreatedEntity } from './systems/component-system';
 import type {
 	BaseComponent, ComponentDefinitionMap, ComponentMap, ComponentRegistry, ComponentsOf,
 	EntityConfigOf, RegisteredComponentDefinition, RegisteredComponentRegistry,
@@ -169,6 +170,18 @@ export default class BaseWorld<
 	}
 	loadEntity(config: Cfg, created = true): BaseEntity<C, Cfg> {
 		return this.factory.loadEntity(config, created);
+	}
+	// Materializes an entity a worker created off-thread (see createEntityWorker): the worker already minted the id and
+	// allocated + wrote every game-component block, so this only builds the `entity` component on the main thread
+	// (interning its type) and adopts each worker-allocated block by index, then wires it into the world like any new
+	// entity. Adopted entities are always the base BaseEntity - the factory's per-type subclass/template is not applied.
+	adoptEntity(descriptor: WorkerCreatedEntity): BaseEntity<C, Cfg> {
+		const entity = new BaseEntity<C, Cfg>(this, undefined, descriptor.eid);
+		entity.loadComponent('entity', { type: descriptor.type, isStatic: descriptor.isStatic }, false);
+		for(let name of Object.keys(descriptor.components)) {
+			entity.attachComponent(name, descriptor.components[name]);
+		}
+		return this.addEntity(entity, true);
 	}
 	// Replaces the world's contents. Entities load with created = false so no finishLoading runs mid-batch;
 	// finishLoading is called on each once the whole batch exists, so cross-entity dependencies can resolve.

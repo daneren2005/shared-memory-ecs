@@ -430,8 +430,11 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 
 			expect(world.entities.size).toEqual(2);
 			let spawned = listOf(world.entities).find(other => other !== entity);
+			// The worker wrote the health block directly; the main thread adopted it (no re-allocation).
 			expect(spawned?.components.health?.maxHealth).toEqual(10);
 			expect(spawned?.components.health?.health).toEqual(10);
+			// The entity component is built on the main thread when the descriptor is adopted, interning the type.
+			expect(spawned?.components.entity.type).toEqual('Spawned');
 
 			// It exists only after the run, so the system picks it up next run.
 			expect(system.isEntityInSystem(spawned!)).toEqual(true);
@@ -633,6 +636,7 @@ class SpawnSystem extends ComponentSystem<Components, { health: Int32Array }> {
 			name: 'SpawnSystem',
 			required: ['health'],
 			updateFunction: spawnUpdate,
+			createsEntities: true,
 			forceMainThread: mode === 'main-thread',
 			getWorker: () => new Worker(SPAWN_WORKER_URL, { type: 'module' }),
 		});

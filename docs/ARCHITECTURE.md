@@ -27,12 +27,13 @@ Run type-check and lint after every edit (AGENTS.md).
 | --- | --- |
 | `index.ts` | Public barrel (main-thread entry). |
 | `worker.ts` | `/worker` subpath barrel — only what runs in a worker, keeps worker bundles tiny. |
-| `world.ts` | `BaseWorld<R,C,Cfg>`: owns the heap, the `constantStrings` cache, the heap-backed atomic eid counter (`allocateEid`, unique across threads), the registry (one `MemoryComponent` per component), `entities` (Map by eid), systems, the update loop, clocks (`gameTime`/`playerTime`/`timeScale`/`paused`), add/remove-entity → system wiring, the deferred component-free buffers (`deferComponentMemoryFree`/`notifySystemRunCompleted`), and reuse via `load` / async `clear` gated by the `pristine` flag. `getSharedComponentMemory()` ships each pool + the eid counter to workers. Re-emits the heap's buffer-growth as a `grow-buffer` event, and `addGrownBuffer()` adopts a buffer a worker grew (then fans it out) so worker heaps stay in sync both ways. |
-| `entity.ts` | `BaseEntity<C,Cfg>`: eid (from `world.allocateEid()`, a heap atomic — unique across threads) + component bag; `load`/`save`/`finishLoading`, `loadComponent`/`removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. `removeComponent`/`deleteAllComponentMemory` call the definition's optional `free(component)` (release extra heap the component owns) then defer the block free to the world rather than freeing inline. EventEmitter. |
+| `world.ts` | `BaseWorld<R,C,Cfg>`: owns the heap, the `constantStrings` cache, the heap-backed atomic eid counter (`allocateEid`, unique across threads), the registry (one `MemoryComponent` per component), `entities` (Map by eid), systems, the update loop, clocks (`gameTime`/`playerTime`/`timeScale`/`paused`), add/remove-entity → system wiring, the deferred component-free buffers (`deferComponentMemoryFree`/`notifySystemRunCompleted`), and reuse via `load` / async `clear` gated by the `pristine` flag. `getSharedComponentMemory()` ships each pool + the eid counter to workers; `adoptEntity()` materializes an entity a worker created off-thread. Re-emits the heap's buffer-growth as a `grow-buffer` event, and `addGrownBuffer()` adopts a buffer a worker grew (then fans it out) so worker heaps stay in sync both ways. |
+| `entity.ts` | `BaseEntity<C,Cfg>`: eid (from `world.allocateEid()`, a heap atomic — unique across threads; or a pre-minted `adoptEid` for worker-created entities) + component bag; `load`/`save`/`finishLoading`, `loadComponent` (create block from `toBlock` then `attach`), `attachComponent` (adopt a worker-written block by index — `attach` only), `removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. Both `loadComponent`/`attachComponent` ensure `component.block` holds the typed-array view (`??= memory.getBlock(index)` — a `Component` subclass already set it, a plain-object accessor gets it filled in), so query-delta building reuses this instead of re-fetching (a `getBlock` gives a fresh subarray each call) per system the entity joins. `removeComponent`/`deleteAllComponentMemory` call the definition's optional `free(component)` (release extra heap the component owns) then defer the block free to the world rather than freeing inline. EventEmitter. |
 | `entity-component.ts` | The always-present `entity` component (`type`, `dead`, `isStatic`), all worker-visible in memory. `type` is stored as a pointer to an interned `ConstantString` (see `constant-string-cache.ts`); the `type` accessor resolves it through `world.constantStrings`. Exports `DEAD_INDEX`, `STATIC_INDEX`, `TYPE_INDEX`, `entityDefinition`. |
 | `constant-string-cache.ts` | `ConstantStringCache`: interns immutable strings (from `@daneren2005/shared-memory-objects`'s `ConstantString`) in the heap and resolves a stored pointer back to its string. `getOrCreate(value)` dedupes so identical values share one allocation; `getString(pointer)` is a Map hit before rebuilding from memory. The main thread creates+interns (`world.constantStrings`); each worker reconstructs its own cache over the same buffers to resolve pointers. |
 | `entity-factory.ts` | `EntityFactory<C,Cfg>`: maps entity `type` → base config template; layers caller config over it. `loadEntity` builds + adds to world. Override `createEntity` for subclass-per-type. |
-| `component-definition.ts` | All the component/registry types: `ComponentDefinition` (incl. the optional `free(component)` teardown hook — release extra heap the component allocated in `load`), `BaseComponent`, `ComponentMap`, `ComponentRegistry`, `RegisteredComponentDefinition`, and the derivations `ComponentsOf` / `EntityConfigOf` that infer `C`/`Cfg` from a registry. |
+| `component-definition.ts` | All the component/registry types: `ComponentDefinition` — a component is built in two required halves, `toBlock(config, entity?)` (worker-safe config→block-values map) + `attach(entity, memory, index)` (accessor over that block); loading is `attach(entity, memory, memory.create(toBlock(config)))`, and a worker calls only `toBlock`. Plus the optional `free(component)` teardown hook and `save(component)`. `BaseComponent`, `ComponentMap`, `ComponentRegistry`, `RegisteredComponentDefinition`, and the derivations `ComponentsOf` (from `attach`'s return, intersected with `BaseComponent`) / `EntityConfigOf` that infer `C`/`Cfg` from a registry. |
+| `component.ts` | `Component<T>` base class an `attach` returns (`new YourComponent(block, index)`): holds `block`/`index` fields, subclass adds prototype get/set over `this.block`. One shared hidden class per component type keeps reads monomorphic/inlinable and construction a single allocation (vs a closure per accessor). `attach` may still return a plain object; the entity layer fills in `block` either way. |
 | `memory-component.ts` | `MemoryComponent`: a pool of same-sized blocks in the heap (`create`/`getBlock`/`get`/`set`/`delete`/`clear`). Backed by a `SharedPool` (all bookkeeping in the heap), so a worker can reconstruct a handle over the same pool (`MemoryComponent.fromSharedMemory` / owner's `getSharedMemory()`) and allocate/read blocks off-thread — lockless except a spin-lock guarding rare chunk growth. Backing type is `ComponentTypedArray`. |
 | `performance-timing.ts` | `PerformanceTiming`: hooks world events, emits `stats-updated` snapshots (`update` / per-system `run`+`events` / `events`). Non-invasive. |
 
@@ -51,13 +52,14 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
 
 | File | Responsibility |
 | --- | --- |
-| `workers/create-component-worker.ts` | `createComponentWorker(self, updateFn)` — worker entry helper. |
+| `workers/create-component-worker.ts` | `createComponentWorker(self, updateFn, registry?)` — worker entry helper. Pass the component registry only for a worker that creates entities (gives it each `toBlock`). |
 | `workers/component-web-worker.ts` | Main-thread side of the worker (message plumbing). |
 | `workers/component-worker-message.ts` | Message + `EntityEvent`/`SystemEvents` types across the boundary. |
 | `workers/apply-query-delta.ts` | Applies query membership deltas. |
 | `workers/web-worker.ts` | `WebWorker` wrapper. |
 | `actions/kill-entity.ts` / `kill-entity-worker.ts` | Mark an entity dead (main / worker side). |
-| `actions/create-entity-worker.ts` | Create an entity from inside a worker update. |
+| `actions/create-entity-worker.ts` | `createEntityWorker(world, config, callbacks)`: create an entity from a factory config off-thread (via `world.buildEntityDescriptor`), report the descriptor for the main thread to adopt. |
+| `actions/build-worker-entity.ts` | `buildWorkerEntity(config, factoryConfigs, registry, allocator)`: shared config→descriptor builder (template merge + per-component `toBlock` allocation); used by the real worker and the main-thread fallback. |
 
 ## Core data flow
 
@@ -123,7 +125,25 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   `grow-buffer-from-worker`; `ComponentSystem` forwards it to `world.addGrownBuffer`, which adopts the buffer and
   re-emits `grow-buffer` to fan it out to sibling workers. Growth is idempotent: neither the world nor a worker
   replaces a buffer position it already holds (the originating worker ignores the echo of its own buffer). This is the
-  substrate for worker-side entity creation; the entity-wiring/adopt layer on top is not built yet.
+  substrate for worker-side entity creation (below).
+- **Worker-side entity creation:** an update function calls `createEntityWorker(world, config, callbacks)`
+  (`actions/create-entity-worker.ts`) with a factory config `{ type, ...overrides }`. The worker builds the entity
+  **off-thread** via `world.buildEntityDescriptor` (injected each run; the shared `buildWorkerEntity` in
+  `actions/build-worker-entity.ts`): it layers the type's factory template under the overrides, mints an id
+  (`world.allocate.allocateEid()`), and for each triggered game component pushes a block into the shared pool
+  (`allocateComponentBlock`) filled by the component's `toBlock(config)` — the worker-safe half of the definition
+  (no entity/world access). `entity` and `loadInFinishLoading` components are skipped. It reports
+  a `WorkerCreatedEntity` (`{ eid, type, isStatic?, components: { name: index } }`) through `callbacks.createEntity`.
+  On run-complete the main thread calls `world.adoptEntity(descriptor)`: it builds the `entity` component on the main
+  thread (interning the type is main-thread-only), then `entity.attachComponent(name, index)` wraps each
+  worker-written block via the definition's config-free `attach(entity, memory, index)` half — no block is
+  re-allocated (a component's own extra allocations, if any, live in `attach`, so they happen the same way whether
+  loaded or adopted). It then `addEntity`s the entity so it joins systems via
+  `entity-added` on the next frame. Two opt-ins gate it: the system's `createsEntities: true` (ships the factory
+  configs to its worker on load) and the worker entry passing the component registry to `createComponentWorker` (so
+  the worker has each `toBlock`). Runs identically on the main-thread fallback (same `buildWorkerEntity`, over
+  `world.registry`/`world.factory.configs`). Adopted entities are always the base `BaseEntity`; the factory's per-type
+  subclass is not applied.
 - **Worker update-function hooks:** besides the per-entity body, an `updateFunction` may carry `init`,
   `preRun`, and `entityRemoved`. `init(data)` runs on every `finishLoading` — `data` comes from the
   system's `getInitData()` (typed via the `D` param) — and its returned `Partial<W>` is merged onto `world`
@@ -131,8 +151,9 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   once per run before the entity pass; `entityRemoved` runs once per entity that left the system this run.
 - **Worker report-back:** update functions write shared memory directly; anything needing
   the main thread goes through `callbacks` — `entityComponentChanged` (`component-property-updated`),
-  `entityDied` (`death`), `createEntity`, plus `emitEntityEvent` (per-entity, arbitrary
-  args, structured-cloned) and `emitSystemEvent` (per-run, one array of ids, allocation-free).
+  `entityDied` (`death`), `createEntity` (a `WorkerCreatedEntity` descriptor → `world.adoptEntity`), plus
+  `emitEntityEvent` (per-entity, arbitrary args, structured-cloned) and `emitSystemEvent` (per-run, one array of
+  ids, allocation-free).
 
 ## Conventions / gotchas
 
@@ -141,8 +162,13 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   with `.forEach`/`.values()`; use `Array.from(...values())` for array methods.
 - Every entity always has the `entity` component; game components are partial.
 - **Hot path:** reading a component off thousands of entities every frame — hold the block
-  (`registry[name].memoryComponent.getBlock(index)`) and index by exported `*_INDEX`
-  constants, not the accessor closures (megamorphic). See README "Reading components on a hot path".
+  (`registry[name].memoryComponent.getBlock(index)`, or the cached `component.block`) and index by exported
+  `*_INDEX` constants rather than going through the accessor. `Component`-subclass accessors are prototype
+  getters (monomorphic, inlinable), so the gap is far smaller than the old closure accessors, but a raw indexed
+  read still wins the tightest loops. See README "Reading components on a hot path".
+- `getBlock(index)` allocates a **fresh subarray view every call**, so it is not free. A live component caches
+  its view on `component.block` at attach; reuse that rather than re-fetching (`ComponentSystem.buildComponents`
+  relies on it, which is what keeps spawn-heavy query-delta building off the main thread's back).
 - Worker entry files and anything they import must import from `@daneren2005/shared-memory-ecs/worker`,
   not the root barrel, or the whole library is dragged into the worker bundle.
 - Types are the source of truth: a game declares its registry once and `ComponentsOf`/

@@ -12,7 +12,9 @@ export type { EntityEvent, SystemEvents } from './systems/workers/component-work
 export type {
 	ComponentSystemWorld,
 	ComponentSystemCallbacks,
-	CreateEntityConfig,
+	WorkerAllocator,
+	WorkerCreateEntityConfig,
+	WorkerCreatedEntity,
 	EntityUpdateComponents,
 	EntityQueryComponents,
 	EntityUpdateFunction,

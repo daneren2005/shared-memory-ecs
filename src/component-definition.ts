@@ -9,6 +9,7 @@ import type { EntityComponent, EntityComponentConfig, EntityComponentSerializati
 // thousands of entities per frame. See "Reading components on a hot path" in the README.
 export interface BaseComponent {
 	index: number
+	block?: ComponentTypedArray
 }
 
 export type ComponentMap = Record<string, BaseComponent>;
@@ -25,7 +26,16 @@ export interface ComponentDefinition<
 	loadProperties: Array<keyof Config & string>
 	// Defer load to BaseEntity#finishLoading (after the whole batch exists) so a loader can reference other entities.
 	loadInFinishLoading?: boolean
-	load(entity: BaseEntity, memory: MemoryComponent<T>, config: Config & Serialization): Component
+	// A component is built in two halves so creation can happen off-thread: `toBlock` maps a (factory-merged) config
+	// to the raw block values, `attach` builds the accessor over that block. Loading a component is
+	// `attach(entity, memory, memory.create(toBlock(config)))`; a worker only calls `toBlock` (writing the block
+	// itself) and the main thread calls `attach` when it adopts the entity.
+	//
+	// `toBlock` must be worker-safe: pure over `config`, no entity/world access - so it can run off-thread. The
+	// optional `entity` is passed only on the main thread (never in a worker), for the built-in `entity` component,
+	// which must intern its type string through `entity.world`; a worker-creatable component must not touch it.
+	toBlock(config: Config & Serialization, entity?: BaseEntity): Array<number>
+	attach(entity: BaseEntity, memory: MemoryComponent<T>, index: number): Component
 	save?(component: Component): Serialization
 	// Called when the component is torn down (removeComponent, or the entity being removed/killed/cleared)
 	free?(component: Component): void
@@ -57,9 +67,11 @@ type DefinitionConfig<D> = D extends ComponentDefinition<BaseComponent, Componen
 	? Config & Serialization
 	: never;
 
+// Intersect with BaseComponent so the entity layer's cached `block` is visible on every component instance (an
+// `attach` return type only carries `index`, never the optional `block`).
 export type ComponentsOf<R extends ComponentDefinitionMap> = {
-	[K in keyof R]: ReturnType<R[K]['load']>
-} & { entity: EntityComponent };
+	[K in keyof R]: ReturnType<R[K]['attach']> & BaseComponent
+} & { entity: EntityComponent & BaseComponent };
 
 export type EntityConfigOf<R extends ComponentDefinitionMap> = Partial<
 	UnionToIntersection<{ [K in keyof R]: DefinitionConfig<R[K]> }[keyof R]>

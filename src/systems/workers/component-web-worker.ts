@@ -6,8 +6,9 @@ import type BaseWorld from '../../world';
 import type { ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from '../../component-definition';
 import type {
 	ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents,
-	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerAllocator,
+	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerAllocator, WorkerCreatedEntity,
 } from '../component-system';
+import { buildWorkerEntity, type WorkerCreateRegistry } from '../../actions/build-worker-entity';
 
 // Main-thread fallback that runs the update function synchronously, mirroring the real worker's behavior.
 export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> extends WebWorker {
@@ -19,11 +20,13 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 	// Running on the main thread, this shares the world (its string cache, registry pools, eid counter) directly.
 	private world: BaseWorld<ComponentDefinitionMap, C>;
 	private allocator: WorkerAllocator;
+	private createsEntities: boolean;
 
-	constructor(updateFunction: EntityUpdateFunction<C, T, W, D>, world: BaseWorld<ComponentDefinitionMap, C>) {
+	constructor(updateFunction: EntityUpdateFunction<C, T, W, D>, world: BaseWorld<ComponentDefinitionMap, C>, createsEntities = false) {
 		super();
 		this.updateFunction = updateFunction;
 		this.world = world;
+		this.createsEntities = createsEntities;
 		const registry = world.registry as RegisteredComponentRegistry<C>;
 		this.allocator = {
 			allocateEid: () => world.allocateEid(),
@@ -51,11 +54,15 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 			}
 			message.world.getString = (pointer: number) => this.world.constantStrings.getString(pointer) ?? '';
 			message.world.allocate = this.allocator;
+			if(this.createsEntities) {
+				const registry: WorkerCreateRegistry = this.world.registry;
+				message.world.buildEntityDescriptor = config => buildWorkerEntity(config, this.world.factory.configs, registry, this.allocator);
+			}
 			// Timed like the real worker so a forceMainThread system reports a real run cost, not zero.
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
 			let systemEvents: SystemEvents = {};
-			let createdEntities: Array<Record<string, unknown>> = [];
+			let createdEntities: Array<WorkerCreatedEntity> = [];
 
 			this.entities = applyQueryDelta(this.entities, message.entities as QueryDelta<T>);
 
@@ -91,8 +98,8 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 						args: [],
 					});
 				},
-				createEntity(config: Record<string, unknown>) {
-					createdEntities.push(config);
+				createEntity(entity: WorkerCreatedEntity) {
+					createdEntities.push(entity);
 				},
 			};
 			if(this.updateFunction.preRun) {

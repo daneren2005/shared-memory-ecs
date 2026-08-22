@@ -10,11 +10,14 @@ fog of war, sub-classed entities, required components, etc).
 - **Component** – a plain object with an `index` (its block inside a shared-memory pool) plus getters/
   setters over that memory. Games decide what components exist.
 - **`ComponentDefinition`** – describes a component: its typed array `type`, block `size`, the config keys
-  that trigger loading (`loadProperties`), a `load(entity, memory, config)`, an optional `save(component)`,
-  and an optional `free(component)`. A component's data splits into `Config` (defining props supplied up
-  front, e.g. `maxHealth`) and `Serialization` (runtime-derived state, e.g. current `health`); `load` sees
-  `Config & Serialization` while `save` returns only the `Serialization` slice. `free` runs when the
-  component is torn down (see [Freeing extra resources](#freeing-extra-resources)).
+  that trigger loading (`loadProperties`), and the two halves that build it — `toBlock(config)` (maps the
+  config to the raw block values) and `attach(entity, memory, index)` (builds the accessor over that block).
+  Loading a component is `attach(entity, memory, memory.create(toBlock(config)))`; splitting it this way lets a
+  worker build the block off-thread (it calls only `toBlock`) and the main thread wrap it (`attach`) when it
+  adopts the entity. Plus an optional `save(component)` and `free(component)`. A component's data splits into
+  `Config` (defining props supplied up front, e.g. `maxHealth`) and `Serialization` (runtime-derived state,
+  e.g. current `health`); `toBlock` sees `Config & Serialization` while `save` returns only the `Serialization`
+  slice. `free` runs when the component is torn down (see [Freeing extra resources](#freeing-extra-resources)).
 - **`ComponentRegistry<C>`** – the map of all component definitions for a game.
 - **`EntityFactory<C>`** – maps an entity `type` name to a base (template) config. Loading an entity layers
   the caller's config over its type's template, so shared static data lives in one place and a save only
@@ -33,6 +36,7 @@ fog of war, sub-classed entities, required components, etc).
 ## Defining components
 
 ```ts
+import { Component } from '@daneren2005/shared-memory-ecs';
 import type { ComponentDefinition } from '@daneren2005/shared-memory-ecs';
 
 interface HealthComponent {
@@ -44,7 +48,16 @@ interface HealthComponent {
 const HEALTH_INDEX = 0;
 const HEALTH_MAX_INDEX = 1;
 
-// `maxHealth` is the defining Config prop; `health` is optional, runtime-derived Serialization.  `load`
+// The accessor is a subclass of `Component`, so its get/set live on one shared prototype: reading a component off
+// thousands of entities stays monomorphic and inline, and each instance is a single allocation rather than a
+// closure per accessor. Index `this.block` (the typed-array view, set for you) by the exported *_INDEX constants.
+class Health extends Component<Int32Array> implements HealthComponent {
+	get health() { return this.block[HEALTH_INDEX]; }
+	set health(value: number) { this.block[HEALTH_INDEX] = value; }
+	get maxHealth() { return this.block[HEALTH_MAX_INDEX]; }
+}
+
+// `maxHealth` is the defining Config prop; `health` is optional, runtime-derived Serialization.  `toBlock`
 // and `save` both see the combined `{ maxHealth: number, health?: number }`.
 const healthDefinition: ComponentDefinition<HealthComponent, Int32Array, { maxHealth: number }, { health?: number }> = {
 	type: Int32Array,
@@ -52,16 +65,15 @@ const healthDefinition: ComponentDefinition<HealthComponent, Int32Array, { maxHe
 	// Configs are flat and shared: this component loads whenever `maxHealth` is present, then reads what it
 	// needs off the same config object.  Only Config props may appear here.
 	loadProperties: ['maxHealth'],
-	load(entity, memoryComponent, config) {
-		const index = memoryComponent.create([config.health ?? config.maxHealth, config.maxHealth]);
-		const memory = memoryComponent.getBlock(index);
-
-		return {
-			index,
-			get health() { return memory[HEALTH_INDEX]; },
-			set health(value: number) { memory[HEALTH_INDEX] = value; },
-			get maxHealth() { return memory[HEALTH_MAX_INDEX]; }
-		};
+	// The block values, purely from config — so a worker can build the block off-thread. No entity/world access.
+	toBlock(config) {
+		return [config.health ?? config.maxHealth, config.maxHealth];
+	},
+	// The accessor over an already-allocated block. Runs on the main thread both when loading and when adopting a
+	// worker-built entity; a component's own extra allocations (a SharedList, a resource block) go here — a
+	// subclass that owns extra memory takes more constructor args (the entity, another pool) and stores them.
+	attach(entity, memoryComponent, index) {
+		return new Health(memoryComponent.getBlock(index), index);
 	},
 	save(component) {
 		// save returns only Serialization; maxHealth is Config and comes back from the template on reload.
@@ -74,7 +86,7 @@ const registry = {
 	health: healthDefinition
 	// ...other component definitions
 };
-type Components = { [K in keyof typeof registry]: ReturnType<(typeof registry)[K]['load']> };
+type Components = { [K in keyof typeof registry]: ReturnType<(typeof registry)[K]['attach']> };
 ```
 
 ## Using the world
@@ -147,10 +159,10 @@ one: it is typed, it is readable, and one read costs nothing worth measuring.
 
 It is not free, though, and the cost shows up in exactly one situation — reading the same component off
 *thousands* of entities, *every frame*. The accessor walks several objects to get there and ends in a getter
-closure over the shared block, and because every entity has its own closure those call sites go megamorphic
-once enough entities are alive, so none of it inlines. Measured over ~10,000 entities, reading four values per
-entity cost **~950ns through the accessors against ~140ns straight off the block** — the difference between
-10ms a frame and 1.5ms.
+call over the shared block. `Component`-subclass accessors are prototype getters (all instances of a type share
+one hidden class, so those reads stay monomorphic and inline — unlike the old per-entity closures, which went
+megamorphic), but a getter call plus the property walk still loses to a raw indexed read in the very tightest
+per-frame loops.
 
 Where that matters, hold the block instead. It is the same memory the accessors read, so nothing changes about
 what you get, and it is what the update functions already work on:
@@ -158,15 +170,15 @@ what you get, and it is what the update functions already work on:
 ```ts
 import { TRANSFORM_X_INDEX } from '@daneren2005/shared-memory-physics';
 
-// Resolve once, when whatever is doing the reading is set up.
-const health = entity.components.health!;
-const block = world.registry.health.memoryComponent.getBlock(health.index) as Int32Array;
+// Resolve once, when whatever is doing the reading is set up. The component caches its view on `.block` when it
+// is attached, so read that rather than paying for another getBlock (each call allocates a fresh subarray).
+const block = entity.components.health!.block as Int32Array;
 
 // Then per frame, per entity:
 block[HEALTH_INDEX];
 ```
 
-Two things come with that. The block is only valid while the component is: resolve it again if the component
+Two things come with that. The block is only valid while the component is: re-read `.block` if the component
 can be removed and re-added, or hang it off something that dies with the entity. And it is indexed rather than
 named, so the offsets have to be exported alongside the definition — which is why every component in the
 physics library exports its `*_INDEX` constants.
@@ -281,6 +293,11 @@ or `killEntityWorker` should import them from `/worker` too. Type-only imports (
 `ComponentSystemWorld`, ...) can come from either path since types are erased, and main-thread code
 (`ComponentSystem`, `BaseWorld`, `EntityFactory`, ...) keeps importing from the package root.
 
+A worker that creates entities (see [Creating entities from a worker](#creating-entities-from-a-worker)) passes
+your component registry as the third argument - `createComponentWorker(self, shipUpdate, registry)` - so it has
+each component's `toBlock`. Only do this in workers that actually create entities; it pulls the registry (and
+whatever it imports) into that worker's bundle.
+
 ### Reading an entity's type in a worker
 
 The `entity` component carries the entity's `type` in shared memory as a pointer, so a worker can resolve it
@@ -314,7 +331,8 @@ on the main thread) resolves the same way.
 An update function runs on shared memory, so anything it writes is already visible on the main thread. What
 it cannot do from there is touch the world, so the things that have to happen back on it go through
 `callbacks`: `entityComponentChanged` (emitted on the entity as `component-property-updated`), `entityDied`
-(as `death`), and `createEntity`. All of them are collected during the run and applied once it completes.
+(as `death`), and `createEntity` (see [Creating entities from a worker](#creating-entities-from-a-worker)).
+All of them are collected during the run and applied once it completes.
 
 `emitEntityEvent` is the escape hatch for an event of your own: name it whatever you like and give it
 whatever args suit it, and it is emitted on the entity under that name. It exists so a system does not have
@@ -369,6 +387,59 @@ thread already holds the values - sending them along would only pay to copy what
 System events are dispatched before the per-entity events of the same run, so an entity a run both moved and
 killed is still in the world when its move is reported.
 
+### Creating entities from a worker
+
+An update function can spawn a whole entity, off-thread, from a factory config - the same
+`{ type, ...overrides }` you would pass to `world.loadEntity`. Because component pools live in shared memory,
+the worker merges the type's factory template, allocates each component's block and writes it, then reports
+what it made; the main thread only wraps the result:
+
+```ts
+// in the update function - spawn a ship, overriding two fields of its template
+createEntityWorker(world, { type: 'ship', x: 100, y: 150 }, callbacks);
+```
+
+`createEntityWorker` layers your overrides over the `ship` template, mints a unique id from a shared atomic
+counter (so it never collides with one the main thread or another worker hands out), and for each component
+the merged config triggers, pushes a block into its pool and writes the values - all off-thread. It reports
+back an id-plus-block-indexes descriptor; when the run completes the main thread *adopts* it, building the
+always-present `entity` component there (interning the `type` is a main-thread job) and wrapping each block the
+worker wrote - no block is copied or re-allocated. Like every other worker report-back, the new entity first
+exists on the following frame, so the system picks it up next run.
+
+Two things make this work, both opt-in so only the workers that create entities pay for them:
+
+- Register the system with `createsEntities: true`. That ships the factory templates to its worker on load.
+- In that system's worker entry, pass your component registry to `createComponentWorker`, so the worker has
+  each component's block builder:
+
+  ```ts
+  createComponentWorker(self, shipUpdate, registry);
+  ```
+
+Every component is already defined as two halves for exactly this — `toBlock(config)` (the block values) and
+`attach(entity, memory, index)` (the accessor), see [Defining components](#defining-components). The worker
+runs only `toBlock` (off-thread, no entity/world), and the main thread runs `attach` when it adopts the entity.
+So creating a component in a worker needs nothing extra as long as its `toBlock` is genuinely pure over config —
+no `entity`/`world` access:
+
+```ts
+const shipHealth: ComponentDefinition<HealthComponent, Int32Array, HealthConfig> = {
+	// ...
+	toBlock(config) {
+		return [config.health ?? config.maxHealth, config.maxHealth];
+	},
+	attach(entity, memory, index) {
+		const block = memory.getBlock(index);
+		// ...build the accessor over `block`
+	},
+};
+```
+
+This runs identically on the main-thread fallback. Two current limits: a `loadInFinishLoading` component (one
+that reads other entities) is skipped, since the worker has no world to read; and an adopted entity is always
+the base `BaseEntity` - a factory per-type subclass is not applied to it.
+
 ### Freeing component memory safely
 
 Component blocks live in a shared pool, so a freed block gets handed straight back out to the next entity that
@@ -387,7 +458,7 @@ a stuck system there is a bug worth chasing down.
 
 ### Freeing extra resources
 
-Everything above frees a component's own block. A component that allocates something *else* in `load` —
+Everything above frees a component's own block. A component that allocates something *else* in `attach` —
 another heap structure (a `SharedList`, a `SharedString`) or child entities it owns — needs to release that
 too, and the block-level deferred free won't do it. Give the definition an optional `free(component)`:
 
@@ -396,7 +467,10 @@ const cargoDefinition: ComponentDefinition<Cargo, Uint32Array, CargoConfig> = {
   type: Uint32Array,
   size: 3,
   loadProperties: ['cargoSpace'],
-  load(entity, memory, config) {
+  toBlock(config) {
+    /* the block's own values */
+  },
+  attach(entity, memory, index) {
     /* allocate a SharedList in the heap, stash its pointer in the block, return accessors */
   },
   free(component) {

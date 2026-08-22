@@ -21,6 +21,7 @@ export type {
 } from './performance-timing';
 export { default as MemoryComponent } from './memory-component';
 export type { ComponentTypedArray } from './memory-component';
+export { default as Component } from './component';
 export type {
 	BaseComponent,
 	ComponentMap,
@@ -45,7 +46,9 @@ export type {
 	ComponentSystemQuery,
 	ComponentSystemWorld,
 	ComponentSystemCallbacks,
-	CreateEntityConfig,
+	WorkerAllocator,
+	WorkerCreateEntityConfig,
+	WorkerCreatedEntity,
 	EntityUpdateComponents,
 	EntityQueryComponents,
 	EntityUpdateFunction,

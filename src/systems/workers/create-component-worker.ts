@@ -4,8 +4,12 @@ import type ComponentWorkerMessage from './component-worker-message';
 import type { EntityEvent, SystemEvents } from './component-worker-message';
 import ConstantStringCache from '../../constant-string-cache';
 import MemoryComponent from '../../memory-component';
-import type { ComponentMap } from '../../component-definition';
-import type { ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents, EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject } from '../component-system';
+import type { ComponentDefinitionMap, ComponentMap } from '../../component-definition';
+import type {
+	ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents,
+	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerCreatedEntity,
+} from '../component-system';
+import { buildWorkerEntity, type FactoryConfigs } from '../../actions/build-worker-entity';
 import { applyQueryDelta } from './apply-query-delta';
 
 // The slice of the worker global scope createComponentWorker touches. Passing `self` explicitly (rather than
@@ -20,7 +24,7 @@ export default function createComponentWorker<
 	T extends EntityUpdateComponents<C>,
 	W extends ComponentSystemWorld = ComponentSystemWorld,
 	D = unknown,
->(scope: ComponentWorkerScope, updateFunction: EntityUpdateFunction<C, T, W, D>) {
+>(scope: ComponentWorkerScope, updateFunction: EntityUpdateFunction<C, T, W, D>, definitions?: ComponentDefinitionMap) {
 	// Persistent lists, carried across runs and mutated by each run's delta (see applyQueryDelta).
 	let entities: Array<UpdateEntityConfigObject<T>> = [];
 	const queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
@@ -28,9 +32,11 @@ export default function createComponentWorker<
 	let worldExtension: Partial<W> | undefined;
 	let heap: MemoryHeap | undefined;
 	let stringCache: ConstantStringCache | undefined;
-	// Reconstructed handles over the world's shared state, for future off-thread entity allocation.
-	let registry: { [name: string]: MemoryComponent } = {};
+	// Reconstructed pool handles over the world's shared state, plus the factory templates - for off-thread entity
+	// allocation. `definitions` (passed by the game's worker entry) supplies each component's toBlock/loadProperties.
+	let pools: { [name: string]: MemoryComponent } = {};
 	let eidCounter: AllocatedMemory | undefined;
+	let factoryConfigs: FactoryConfigs | undefined;
 	const getString = (pointer: number): string => stringCache?.getString(pointer) ?? '';
 
 	scope.onmessage = function(e) {
@@ -49,12 +55,13 @@ export default function createComponentWorker<
 				heap.addOnGrowBufferHandlers(buffer => postMessageTyped(scope, { type: 'grow-buffer-from-worker', buffer }));
 			}
 			if(heap && message.sharedMemory) {
-				registry = {};
+				pools = {};
 				for(const name of Object.keys(message.sharedMemory.components)) {
-					registry[name] = MemoryComponent.fromSharedMemory(heap, message.sharedMemory.components[name]);
+					pools[name] = MemoryComponent.fromSharedMemory(heap, message.sharedMemory.components[name]);
 				}
 				eidCounter = heap.getSharedAlloc(message.sharedMemory.eidCounter);
 			}
+			factoryConfigs = message.factoryConfigs;
 			worldExtension = updateFunction.init?.(message.data) ?? undefined;
 			postMessageTyped(scope, {
 				type: 'loaded',
@@ -78,14 +85,20 @@ export default function createComponentWorker<
 				Object.assign(message.world, worldExtension);
 			}
 			message.world.getString = getString;
-			message.world.allocate = {
+			const allocator = {
 				allocateEid: () => eidCounter ? Atomics.add(eidCounter.data, 0, 1) + 1 : 0,
-				allocateComponentBlock: (name, values) => registry[name].create(values),
+				allocateComponentBlock: (name: string, values: Array<number>) => pools[name].create(values),
 			};
+			message.world.allocate = allocator;
+			// Only a system registered with createsEntities (factoryConfigs shipped) whose worker entry passed the
+			// component definitions can create entities from a config.
+			if(factoryConfigs && definitions) {
+				message.world.buildEntityDescriptor = config => buildWorkerEntity(config, factoryConfigs!, definitions, allocator);
+			}
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
 			let systemEvents: SystemEvents = {};
-			let createdEntities: Array<Record<string, unknown>> = [];
+			let createdEntities: Array<WorkerCreatedEntity> = [];
 
 			entities = applyQueryDelta(entities, message.entities as QueryDelta<T>);
 
@@ -121,8 +134,8 @@ export default function createComponentWorker<
 						args: [],
 					});
 				},
-				createEntity(config: Record<string, unknown>) {
-					createdEntities.push(config);
+				createEntity(entity: WorkerCreatedEntity) {
+					createdEntities.push(entity);
 				},
 			};
 			if(updateFunction.preRun) {

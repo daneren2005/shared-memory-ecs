@@ -28,9 +28,13 @@ function makeRegistry() {
 		type: Int32Array,
 		size: 1,
 		loadProperties: ['tracked'],
-		load(entity, memory) {
+		toBlock() {
+			return [0];
+		},
+		// The extra owned block is allocated in attach (which runs on the main thread for adopted entities too), not
+		// toBlock, which only returns the component's own block values.
+		attach(entity, memory, index) {
 			memoryComponent = memory;
-			const index = memory.create([0]);
 			const resourceIndex = memory.create([0]);
 
 			return { index, resourceIndex };
@@ -57,8 +61,10 @@ describe('component free hook', () => {
 			type: Int32Array,
 			size: 1,
 			loadProperties: ['plain'],
-			load(entity, memory) {
-				const index = memory.create([0]);
+			toBlock() {
+				return [0];
+			},
+			attach(entity, memory, index) {
 				return { index };
 			},
 		};

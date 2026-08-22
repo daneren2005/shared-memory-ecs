@@ -1,6 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import type BaseWorld from './world';
-import type { ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from './component-definition';
+import type { BaseComponent, ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from './component-definition';
 import type { EntityComponent } from './entity-component';
 
 export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any> extends EventEmitter {
@@ -11,11 +11,18 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 	// entity is always present; game components are partial.
 	components: Partial<C> & { entity: EntityComponent } = {} as Partial<C> & { entity: EntityComponent };
 
-	constructor(world: BaseWorld<ComponentDefinitionMap, C, Cfg>, config?: Cfg) {
+	// `adoptEid`: build an empty shell around a pre-minted id (an entity a worker created off-thread), skipping the
+	// automatic entity-component load - the caller (world.adoptEntity) loads the entity component and attaches the
+	// worker-allocated blocks itself.
+	constructor(world: BaseWorld<ComponentDefinitionMap, C, Cfg>, config?: Cfg, adoptEid?: number) {
 		super();
 
 		this.world = world;
-		this.eid = world.allocateEid();
+		this.eid = adoptEid ?? world.allocateEid();
+		if(adoptEid !== undefined) {
+			return;
+		}
+
 		this.loadComponent('entity', config ?? {}, false);
 		if(config) {
 			this.load(config);
@@ -25,12 +32,24 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 	loadComponent<K extends keyof C>(name: K, config: any, emitAdded = true): C[K] {
 		const definition = (this.world.registry as RegisteredComponentRegistry<C>)[name];
 		const memoryComponent = definition.memoryComponent;
-		const component = definition.load(this, memoryComponent, config);
+		const index = memoryComponent.create(definition.toBlock(config, this));
+		const component = definition.attach(this, memoryComponent, index);
+		// A Component subclass already holds its block; only fetch one for a plain-object accessor that didn't.
+		(component as BaseComponent).block ??= memoryComponent.getBlock(index);
 		(this.components as Partial<C>)[name] = component;
 		if(emitAdded) {
 			this.emit('component-added', name, component);
 		}
 
+		return component;
+	}
+	// Builds an accessor over an existing block (allocated + written by a worker) instead of creating a new one - the
+	// adopt half of loadComponent, without the create.
+	attachComponent<K extends keyof C>(name: K, index: number): C[K] {
+		const definition = (this.world.registry as RegisteredComponentRegistry<C>)[name];
+		const component = definition.attach(this, definition.memoryComponent, index);
+		(component as BaseComponent).block ??= definition.memoryComponent.getBlock(index);
+		(this.components as Partial<C>)[name] = component;
 		return component;
 	}
 	removeComponent<K extends keyof C>(name: K) {
