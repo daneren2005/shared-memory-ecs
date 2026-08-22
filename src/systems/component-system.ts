@@ -97,6 +97,11 @@ export default abstract class ComponentSystem<
 				this.isRunning = false;
 				this.world.emit(`system-${this.name}-worker-finished`, message.runTime);
 
+				// User-code errors caught inside the run: log + emit on the main thread, one per failure.
+				message.errors.forEach(({ error, entityId, phase }) => {
+					this.onError(error, { entityId, phase });
+				});
+
 				// Before the per-entity events: an entity killed this run is still in the world here, since `death`
 				// is dispatched below and removes it.
 				for(const event of Object.keys(message.systemEvents)) {

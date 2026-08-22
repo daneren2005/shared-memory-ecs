@@ -72,6 +72,15 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   `{ entities: Cfg[], gameTime?, playerTime?, timeScale? }`.
 - **Update:** `world.update(dt)` → `update-started` → per system `shouldRun`/`update`
   (timeScale-scaled, skipped while paused) → `update-finished`.
+- **Error handling:** user code (an update body, `preRun`, `entityRemoved`, an `EntitySystem`'s `updateEntity` /
+  `beforeRunIterables`) never aborts a whole run when it throws. Each is wrapped in try/catch: a per-entity failure
+  is logged and the run continues with the next entity; a `preRun`/`beforeRunIterables` failure skips that run's
+  entity loop entirely. Every failure surfaces on the main thread as a `world.emit('system-error', SystemError)`
+  ({ system, error, entityId?, phase? }) — `System.onError` does the log + emit. In a real worker the errors are
+  collected during the run and shipped back in the `run-complete` message (`errors: WorkerRunError[]`), then
+  `ComponentSystem` replays them through `onError` on the main thread. The world's own coarse try/catch around
+  `system.update()` still catches structural (non-user-code) failures and emits the same event with `phase: 'run'`
+  (plus the existing `lastSystemError` return).
 - **Deferred component free:** a component block is never freed the instant its entity dies or its component is
   removed — a freed block can be reused by a newly created entity while another system's worker is still mid-run
   over the old data, corrupting the new entity. Instead `removeComponent`/`deleteAllComponentMemory` call

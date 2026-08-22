@@ -54,9 +54,22 @@ export default abstract class IterableSystem<C extends ComponentMap, T> extends 
 
 	runIterables(iterables: Array<T>, elapsedTime: number) {
 		let started = performance.now();
-		this.beforeRunIterables();
+		try {
+			this.beforeRunIterables();
+		} catch(e) {
+			// preRun failed: skip the iteration this frame rather than run over half-prepared state.
+			this.onError(e as Error, { phase: 'preRun' });
+			this.remainingInstancesToRun = [];
+			this.remainingInstancesStartTime = null;
+			return;
+		}
 		for(let i = 0; i < iterables.length; i++) {
-			this.updateIterable(iterables[i], elapsedTime);
+			try {
+				this.updateIterable(iterables[i], elapsedTime);
+			} catch(e) {
+				// One iterable failing must not stop the rest of the run.
+				this.onError(e as Error, { phase: 'update', entityId: this.getIterableEntityId(iterables[i]) });
+			}
 
 			if(i % this.iterationsPerCheck === 0) {
 				let now = performance.now();
@@ -72,6 +85,10 @@ export default abstract class IterableSystem<C extends ComponentMap, T> extends 
 		this.remainingInstancesStartTime = null;
 	}
 	beforeRunIterables() {}
+	// Best-effort eid for a failed iterable, so `system-error` can name it. Subclasses whose T carries an eid override.
+	protected getIterableEntityId(_iterable: T): number | undefined {
+		return undefined;
+	}
 
 	abstract getIterables(): Array<T>;
 	abstract updateIterable(iterable: T, elapsedTime: number): void;

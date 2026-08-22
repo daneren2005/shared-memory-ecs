@@ -1,7 +1,7 @@
 import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
 import type AllocatedMemory from '@daneren2005/shared-memory-objects/allocated-memory';
 import type ComponentWorkerMessage from './component-worker-message';
-import type { EntityEvent, SystemEvents } from './component-worker-message';
+import type { EntityEvent, SystemEvents, WorkerRunError } from './component-worker-message';
 import ConstantStringCache from '../../constant-string-cache';
 import MemoryComponent from '../../memory-component';
 import type { ComponentDefinitionMap, ComponentMap } from '../../component-definition';
@@ -99,6 +99,7 @@ export default function createComponentWorker<
 			let entityEvents: Array<EntityEvent> = [];
 			let systemEvents: SystemEvents = {};
 			let createdEntities: Array<WorkerCreatedEntity> = [];
+			let errors: Array<WorkerRunError> = [];
 
 			entities = applyQueryDelta(entities, message.entities as QueryDelta<T>);
 
@@ -138,17 +139,35 @@ export default function createComponentWorker<
 					createdEntities.push(entity);
 				},
 			};
+			let preRunFailed = false;
 			if(updateFunction.preRun) {
-				updateFunction.preRun(message.world, entities, queries, callbacks);
+				try {
+					updateFunction.preRun(message.world, entities, queries, callbacks);
+				} catch(err) {
+					preRunFailed = true;
+					errors.push({ error: err as Error, phase: 'preRun' });
+				}
 			}
 
-			entities.forEach(entity => {
-				updateFunction(message.world, entity.entityId, entity.components, queries, callbacks);
-			});
+			// preRun sets up the run's state; if it threw, skip the entity loop rather than run over half-prepared data.
+			if(!preRunFailed) {
+				entities.forEach(entity => {
+					try {
+						updateFunction(message.world, entity.entityId, entity.components, queries, callbacks);
+					} catch(err) {
+						// One entity failing must not stop the rest of the run.
+						errors.push({ error: err as Error, phase: 'update', entityId: entity.entityId });
+					}
+				});
+			}
 
 			if(updateFunction.entityRemoved) {
 				message.entities.removed.forEach(entityId => {
-					updateFunction.entityRemoved!(message.world, entityId, callbacks);
+					try {
+						updateFunction.entityRemoved!(message.world, entityId, callbacks);
+					} catch(err) {
+						errors.push({ error: err as Error, phase: 'entityRemoved', entityId });
+					}
 				});
 			}
 			const runTime = performance.now() - start;
@@ -160,6 +179,7 @@ export default function createComponentWorker<
 				events: entityEvents,
 				systemEvents,
 				created: createdEntities,
+				errors,
 			});
 		}
 	};

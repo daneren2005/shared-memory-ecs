@@ -50,6 +50,15 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 	}
 	abstract run(elapsedTime: number): void;
 
+	// Logs and surfaces an error thrown by user code (an update body, preRun, etc.) on the main thread: a
+	// `system-error` event carrying the system name, so a run keeps going past one failure instead of aborting.
+	protected onError(error: Error, context: { entityId?: number, phase?: SystemErrorPhase } = {}) {
+		const where = context.entityId !== undefined ? ` (entity ${context.entityId})` : '';
+		console.error(`Error in system ${this.name}${where}: ${error.message}`, error);
+		const payload: SystemError = { system: this.name, error, entityId: context.entityId, phase: context.phase };
+		this.world.emit('system-error', payload);
+	}
+
 	// Marks one run as fully applied. Synchronous systems finish inside update(); subclasses whose work is
 	// deferred (spread across frames, or off-thread) override this and call it at their real completion point.
 	protected onRunFinished() {
@@ -76,4 +85,13 @@ export interface SystemConfig {
 	name: string
 	deltaBetweenRuns?: number
 	firstRun?: boolean
+}
+
+// Which part of a run threw, for the `system-error` event.
+export type SystemErrorPhase = 'preRun' | 'update' | 'entityRemoved' | 'run';
+export interface SystemError {
+	system: string
+	error: Error
+	entityId?: number
+	phase?: SystemErrorPhase
 }

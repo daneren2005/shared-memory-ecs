@@ -59,6 +59,14 @@ export interface EntityEvent {
 	args: Array<unknown>
 }
 
+// An error thrown by user code (preRun / a per-entity update / entityRemoved) during a worker run, reported back
+// so the main thread logs it and emits `system-error`. Error is structured-cloneable across the worker boundary.
+export interface WorkerRunError {
+	error: Error
+	phase: 'preRun' | 'update' | 'entityRemoved'
+	entityId?: number
+}
+
 // For each event the update function named, the ids it happened to. The cheap way to report something that
 // happens to many entities every run: no args (values are already in shared memory), just ids. Emitted on the
 // system, not per entity.
@@ -71,6 +79,7 @@ interface EntityEventsMessage {
 	events: Array<EntityEvent>
 	systemEvents: SystemEvents
 	created: Array<WorkerCreatedEntity>
+	errors: Array<WorkerRunError>
 }
 
 type ComponentWorkerMessage<W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> =

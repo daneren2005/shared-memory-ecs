@@ -1,7 +1,7 @@
 import WebWorker from './web-worker';
 import { applyQueryDelta } from './apply-query-delta';
 import type ComponentWorkerMessage from './component-worker-message';
-import type { EntityEvent, SystemEvents } from './component-worker-message';
+import type { EntityEvent, SystemEvents, WorkerRunError } from './component-worker-message';
 import type BaseWorld from '../../world';
 import type { ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from '../../component-definition';
 import type {
@@ -63,6 +63,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 			let entityEvents: Array<EntityEvent> = [];
 			let systemEvents: SystemEvents = {};
 			let createdEntities: Array<WorkerCreatedEntity> = [];
+			let errors: Array<WorkerRunError> = [];
 
 			this.entities = applyQueryDelta(this.entities, message.entities as QueryDelta<T>);
 
@@ -102,16 +103,34 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 					createdEntities.push(entity);
 				},
 			};
+			let preRunFailed = false;
 			if(this.updateFunction.preRun) {
-				this.updateFunction.preRun(message.world, this.entities, queries, callbacks);
+				try {
+					this.updateFunction.preRun(message.world, this.entities, queries, callbacks);
+				} catch(e) {
+					preRunFailed = true;
+					errors.push({ error: e as Error, phase: 'preRun' });
+				}
 			}
-			this.entities.forEach(entity => {
-				this.updateFunction(message.world, entity.entityId, entity.components, queries, callbacks);
-			});
+			// preRun sets up the run's state; if it threw, skip the entity loop rather than run over half-prepared data.
+			if(!preRunFailed) {
+				this.entities.forEach(entity => {
+					try {
+						this.updateFunction(message.world, entity.entityId, entity.components, queries, callbacks);
+					} catch(e) {
+						// One entity failing must not stop the rest of the run.
+						errors.push({ error: e as Error, phase: 'update', entityId: entity.entityId });
+					}
+				});
+			}
 
 			if(this.updateFunction.entityRemoved) {
 				for(let entityId of message.entities.removed) {
-					this.updateFunction.entityRemoved(message.world, entityId, callbacks);
+					try {
+						this.updateFunction.entityRemoved(message.world, entityId, callbacks);
+					} catch(e) {
+						errors.push({ error: e as Error, phase: 'entityRemoved', entityId });
+					}
 				}
 			}
 
@@ -124,6 +143,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 				events: entityEvents,
 				systemEvents,
 				created: createdEntities,
+				errors,
 			});
 		}
 	}

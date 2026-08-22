@@ -7,6 +7,8 @@ import { killUpdate, KILLED_ENTITIES_EVENT } from '../../__tests__/fixtures/kill
 import { spawnUpdate } from '../../__tests__/fixtures/spawn-update';
 import { queryTargetUpdate } from '../../__tests__/fixtures/query-target-update';
 import { typeReadUpdate, TYPE_READ_EVENT } from '../../__tests__/fixtures/type-read-update';
+import { errorUpdate, POISON_MAX_HEALTH, type ErrorWorld } from '../../__tests__/fixtures/error-update';
+import type { SystemError } from '../../index';
 
 // Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.
 const NOOP_WORKER_URL = new URL('../../__tests__/fixtures/noop.worker.ts', import.meta.url);
@@ -15,6 +17,7 @@ const KILL_WORKER_URL = new URL('../../__tests__/fixtures/kill.worker.ts', impor
 const SPAWN_WORKER_URL = new URL('../../__tests__/fixtures/spawn.worker.ts', import.meta.url);
 const QUERY_TARGET_WORKER_URL = new URL('../../__tests__/fixtures/query-target.worker.ts', import.meta.url);
 const TYPE_READ_WORKER_URL = new URL('../../__tests__/fixtures/type-read.worker.ts', import.meta.url);
+const ERROR_WORKER_URL = new URL('../../__tests__/fixtures/error.worker.ts', import.meta.url);
 
 // Every test runs against both backends: 'main-thread' (ComponentWebWorker) and 'worker' (a real worker
 // module). Both must produce identical observable behavior.
@@ -563,6 +566,62 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 				expect(world.entities.has(entity.eid)).toEqual(false);
 			});
 		});
+
+		// User code throwing must not abort the run: surviving entities still update, and each failure is
+		// logged + surfaced as a `system-error` event on the main thread.
+		describe('error handling', () => {
+			let errorSpy: ReturnType<typeof vi.spyOn>;
+			beforeEach(() => {
+				errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+			});
+			afterEach(() => {
+				errorSpy.mockRestore();
+			});
+
+			it('keeps updating the other entities when one entity update throws', async () => {
+				let system = useSystem(new ErrorSystem(world, mode));
+				await initSystem(system);
+
+				let poison = createEntity({ maxHealth: POISON_MAX_HEALTH });
+				let survivor = createEntity({ maxHealth: 100 });
+
+				let errors: Array<SystemError> = [];
+				world.on('system-error', (error: SystemError) => errors.push(error));
+
+				system.run(16);
+				await flush();
+
+				// The survivor still ran; the poison entity was left untouched.
+				expect(survivor.components.health?.health).toEqual(99);
+				expect(poison.components.health?.health).toEqual(POISON_MAX_HEALTH);
+
+				expect(errors.length).toEqual(1);
+				expect(errors[0].system).toEqual('ErrorSystem');
+				expect(errors[0].entityId).toEqual(poison.eid);
+				expect(errors[0].phase).toEqual('update');
+				expect(errors[0].error.message).toEqual(`entity ${poison.eid} update failed`);
+				expect(errorSpy).toHaveBeenCalled();
+			});
+
+			it('skips the entity loop when preRun throws', async () => {
+				let system = useSystem(new ErrorSystem(world, mode));
+				system.failPreRun = true;
+				await initSystem(system);
+
+				let entity = createEntity({ maxHealth: 100 });
+
+				let errors: Array<SystemError> = [];
+				world.on('system-error', (error: SystemError) => errors.push(error));
+
+				system.run(16);
+				await flush();
+
+				// preRun failed, so no entity ran.
+				expect(entity.components.health?.health).toEqual(100);
+				expect(errors.length).toEqual(1);
+				expect(errors[0].phase).toEqual('preRun');
+			});
+		});
 	});
 });
 
@@ -660,6 +719,24 @@ class QueryTargetSystem extends ComponentSystem<Components, { movement: Float32A
 				},
 			},
 		});
+	}
+}
+
+class ErrorSystem extends ComponentSystem<Components, { health: Int32Array }, ErrorWorld> {
+	failPreRun = false;
+
+	constructor(world: TestWorld, mode: Mode) {
+		super(world, {
+			name: 'ErrorSystem',
+			required: ['health'],
+			updateFunction: errorUpdate,
+			forceMainThread: mode === 'main-thread',
+			getWorker: () => new Worker(ERROR_WORKER_URL, { type: 'module' }),
+		});
+	}
+
+	addDataToWorld(world: ErrorWorld): void {
+		world.failPreRun = this.failPreRun;
 	}
 }
 

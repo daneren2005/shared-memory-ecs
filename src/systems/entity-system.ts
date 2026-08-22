@@ -53,6 +53,9 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 	filterEntity(entity: BaseEntity<C>): boolean {
 		return !entity.components.entity.isStatic;
 	}
+	protected getIterableEntityId(entity: T): number {
+		return entity.eid;
+	}
 	isEntityInSystem(entity: BaseEntity<C>) {
 		return this.entities.has(entity.eid);
 	}

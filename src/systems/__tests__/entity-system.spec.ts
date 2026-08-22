@@ -69,10 +69,51 @@ describe('entity-system', () => {
 		expect(eidsOf(system.entities)).toEqual([entity1.eid, entity2.eid]);
 	});
 
+	it('keeps updating the other entities when one throws, and surfaces a system-error', () => {
+		let errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		let system = new ThrowingSystem(world);
+		world.addSystem(system);
+
+		let failing = createEntity({ maxHealth: 100, speed: 100 });
+		let survivor = createEntity({ maxHealth: 100, speed: 100 });
+		system.failFor = failing.eid;
+
+		let errors: Array<{ system: string, entityId?: number, phase?: string }> = [];
+		world.on('system-error', (error) => errors.push(error));
+
+		system.run(0);
+
+		expect(system.updated).toEqual([survivor.eid]);
+		expect(errors.length).toEqual(1);
+		expect(errors[0].system).toEqual('ThrowingSystem');
+		expect(errors[0].entityId).toEqual(failing.eid);
+		expect(errors[0].phase).toEqual('update');
+		expect(errorSpy).toHaveBeenCalled();
+
+		errorSpy.mockRestore();
+	});
+
 	function createEntity(config: any): BaseEntity<Components> {
 		return world.loadEntity(config);
 	}
 });
+
+class ThrowingSystem extends EntitySystem<Components> {
+	failFor?: number;
+	updated: Array<number> = [];
+
+	constructor(world: TestWorld) {
+		super(world, { name: 'ThrowingSystem', components: ['health'] });
+	}
+
+	updateEntity(entity: BaseEntity<Components>): void {
+		if(entity.eid === this.failFor) {
+			throw new Error(`entity ${entity.eid} failed`);
+		}
+		this.updated.push(entity.eid);
+	}
+}
 
 class StubSystem extends EntitySystem<Components> {
 	constructor(world: TestWorld, components: Array<keyof Components>) {

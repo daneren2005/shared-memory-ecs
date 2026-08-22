@@ -392,6 +392,7 @@ export default class BaseWorld<
 				console.error(error.message, error);
 				failed = true;
 				lastSystemError = error;
+				this.emit('system-error', { system: system.name, error, phase: 'run' });
 			}
 			this.emit(`system-${system.name}-finished`, {
 				ran,
