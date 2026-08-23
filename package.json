@@ -61,6 +61,6 @@
 		"vitest": "^4.1.10"
 	},
 	"peerDependencies": {
-		"@daneren2005/shared-memory-objects": "^1.2.0"
+		"@daneren2005/shared-memory-objects": "^1.3.0"
 	}
 }

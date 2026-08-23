@@ -138,6 +138,13 @@ export default class BaseWorld<
 		this.emit('grow-buffer', data);
 	}
 
+	// Only an off-thread ComponentSystem that creates entities allocates in a worker, so only then is a pre-fanned-out
+	// spare buffer worth keeping (growing one otherwise just wastes a whole buffer). The main-thread fallback allocates
+	// on the main thread, where growth fans out inline, so it never needs one.
+	private get needsSpareBuffer(): boolean {
+		return this.systems.some(system => system instanceof ComponentSystem && system.isWorkerThread && !!system.options.createsEntities);
+	}
+
 	async init() {
 		await Promise.all(this.systems.map(system => system.init()).filter(promise => promise instanceof Promise));
 	}
@@ -375,6 +382,13 @@ export default class BaseWorld<
 
 		// Promote before running: a run this same update then counts toward the wait, instead of after it.
 		this.processFreeBuffers();
+
+		// Keep an empty heap buffer fanned out ahead of any worker that allocates off-thread, so its allocations land in
+		// a buffer every thread already holds. Done here (before dispatching runs) so the resulting grow-buffer message
+		// is queued to each worker before its run message - postMessage is FIFO, so the worker has the buffer first.
+		if(this.needsSpareBuffer) {
+			this.heap.ensureSpareBuffer();
+		}
 
 		let lastSystemError: Error | null = null;
 		this.systems.forEach(system => {

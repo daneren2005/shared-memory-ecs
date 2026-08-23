@@ -443,6 +443,28 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(system.isEntityInSystem(spawned!)).toEqual(true);
 		});
 
+		// A worker that allocates off-thread must never be the one to grow the heap: the main thread keeps an empty
+		// buffer fanned out ahead of each run so the worker's allocations land in a buffer every thread already holds.
+		it('keeps a fanned-out spare heap buffer ahead of a worker that creates entities', async () => {
+			let system = useSystem(new SpawnSystem(world, mode));
+			await initSystem(system);
+			createEntity({ maxHealth: 100 });
+
+			// The world starts with a single, in-use buffer.
+			expect(world.heap.buffers.some(buffer => buffer.isEmpty)).toEqual(false);
+
+			world.update(16);
+
+			if(mode === 'worker') {
+				// Grown + fanned out synchronously, before the run message was posted to the worker.
+				expect(world.heap.buffers.some(buffer => buffer.isEmpty)).toEqual(true);
+			} else {
+				// The main-thread fallback allocates on the main thread, where growth already fans out inline.
+				expect(world.heap.buffers.some(buffer => buffer.isEmpty)).toEqual(false);
+			}
+			await flush();
+		});
+
 		// Regression: events for sub-query-only entities (absent from the main-query cache) must still route back
 		// via the world's getEntityByEid fallback.
 		it('routes a death event to an entity only present in a sub-query', async () => {

@@ -135,6 +135,19 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   re-emits `grow-buffer` to fan it out to sibling workers. Growth is idempotent: neither the world nor a worker
   replaces a buffer position it already holds (the originating worker ignores the echo of its own buffer). This is the
   substrate for worker-side entity creation (below).
+- **Spare-buffer safeguard (why a worker must not grow the heap mid-run):** a `SharedArrayBuffer`'s *bytes* are
+  shared but its *object reference* is not — a thread can only obtain one via an async `postMessage`. The heap's
+  buffer count, though, lives in shared memory and is bumped atomically the instant any thread grows. So if a worker
+  runs out of room mid-run and calls `growBuffer`, it writes pointers (a new pool chunk's `pointerStack` entry) into
+  a buffer only it holds; any *other* thread that reads such a pointer before the buffer message arrives dereferences
+  `heap.buffers[pos] === undefined` and throws. To prevent this, `world.runUpdate` calls `heap.ensureSpareBuffer()`
+  **before dispatching any run** (gated on `needsSpareBuffer`: at least one off-thread `ComponentSystem` with
+  `createsEntities`). `ensureSpareBuffer` (in shared-memory-objects) grows one empty buffer on the **main thread** if
+  none is free (cheap `MemoryBuffer.isEmpty` scan), firing the grow handlers so the `grow-buffer` message is queued to
+  every worker *before* its `run` message (postMessage is FIFO) — so a worker's allocations always land in a buffer
+  every thread already holds, and no worker ever grows into fresh territory. This is a **best-effort spare of one
+  buffer**: a single run that allocates more than a whole empty buffer can still overflow it and force worker-side
+  growth. The main-thread fallback never needs this (it allocates on the main thread, where growth fans out inline).
 - **Worker-side entity creation:** an update function calls `createEntityWorker(world, config, callbacks)`
   (`actions/create-entity-worker.ts`) with a factory config `{ type, ...overrides }`. The worker builds the entity
   **off-thread** via `world.buildEntityDescriptor` (injected each run; the shared `buildWorkerEntity` in
