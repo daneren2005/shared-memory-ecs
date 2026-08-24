@@ -53,6 +53,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 				Object.assign(message.world, this.worldExtension);
 			}
 			message.world.getString = (pointer: number) => this.world.constantStrings.getString(pointer) ?? '';
+			message.world.heap = this.world.heap;
 			message.world.allocate = this.allocator;
 			if(this.createsEntities) {
 				const registry: WorkerCreateRegistry = this.world.registry;

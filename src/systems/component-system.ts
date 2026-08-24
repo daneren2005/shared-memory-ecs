@@ -1,3 +1,4 @@
+import type MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
 import type { GrowBufferData } from '@daneren2005/shared-memory-objects/memory-heap';
 import type BaseWorld from '../world';
 import type BaseEntity from '../entity';
@@ -433,6 +434,10 @@ export interface ComponentSystemWorld {
 	gameTime: number
 	elapsedTime: number
 	getString(pointer: number): string
+	// The reconstructed heap (real worker) or the shared main-thread heap (fallback), injected each run so an
+	// update function can rebuild heap-backed structures (a SharedMap/SharedList) from a pointer in a component
+	// block. Undefined only before the first run.
+	heap?: MemoryHeap
 	allocate?: WorkerAllocator
 	// Injected each run on a system registered with createsEntities: builds a WorkerCreatedEntity descriptor from a
 	// factory config (merges the type's template, allocates + writes each component's block). Drives createEntityWorker.

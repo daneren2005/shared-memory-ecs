@@ -85,6 +85,7 @@ export default function createComponentWorker<
 				Object.assign(message.world, worldExtension);
 			}
 			message.world.getString = getString;
+			message.world.heap = heap;
 			const allocator = {
 				allocateEid: () => eidCounter ? Atomics.add(eidCounter.data, 0, 1) + 1 : 0,
 				allocateComponentBlock: (name: string, values: Array<number>) => pools[name].create(values),
