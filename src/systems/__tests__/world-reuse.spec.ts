@@ -1,11 +1,22 @@
 import { ComponentSystem } from '../../index';
-import type { System } from '../../index';
+import type { ComponentSystemWorld, EntityUpdateFunction, System } from '../../index';
 import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
+import NodeWorkerAdapter from '../../__tests__/fixtures/node-worker-adapter';
 import { damageUpdate, DAMAGED_ENTITIES_EVENT, type DamageWorld, type DamageInitData } from '../../__tests__/fixtures/damage-update';
 import { spawnUpdate } from '../../__tests__/fixtures/spawn-update';
 
 const DAMAGE_WORKER_URL = new URL('../../__tests__/fixtures/damage.worker.ts', import.meta.url);
 const SPAWN_WORKER_URL = new URL('../../__tests__/fixtures/spawn.worker.ts', import.meta.url);
+const CONTROLLED_WORKER_URL = new URL('../../__tests__/fixtures/controlled-node-worker.mjs', import.meta.url);
+const STARTED_INDEX = 0;
+const RESUME_INDEX = 1;
+
+type ControlledWorld = ComponentSystemWorld;
+interface ControlledInitData {
+	control: Int32Array
+}
+
+const noopUpdate: EntityUpdateFunction<Components, { health: Int32Array }, ControlledWorld, ControlledInitData> = () => {};
 
 // Shape of a run-complete message (see component-worker-message.ts). Filled with empty defaults so each test
 // only specifies the part it exercises.
@@ -40,6 +51,16 @@ function workerEntityCount(system: ComponentSystem<Components, any, any, any>): 
 	return (Reflect.get(system.worker, 'entities') as Array<unknown>).length;
 }
 
+async function waitForAtomicValue(control: Int32Array, index: number, expected: number): Promise<void> {
+	const deadline = performance.now() + 2_000;
+	while(Atomics.load(control, index) !== expected) {
+		if(performance.now() >= deadline) {
+			throw new Error(`Timed out waiting for control[${index}] to equal ${expected}`);
+		}
+		await new Promise(resolve => setTimeout(resolve, 0));
+	}
+}
+
 // A World is meant to be reused: world.load() clears the old contents and loads a fresh scenario. These tests
 // cover a ComponentSystem un-initializing across that boundary — its main-thread caches, the worker's persistent
 // lists, and the generation guard that drops a worker run still in flight when the reload happened.
@@ -72,6 +93,33 @@ describe('component-system world reuse', () => {
 		world.load({ entities: [{ maxHealth: 100 }] });
 
 		expect(Reflect.get(system, 'isRunning')).toEqual(false);
+	});
+
+	it('world.clear waits for a real in-flight worker before resolving', async () => {
+		const control = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
+		const system = useSystem(new ControlledSystem(world, control));
+		world.loadEntity({ maxHealth: 100 });
+		await system.init();
+		await system.finishLoading();
+
+		world.update(16);
+		await waitForAtomicValue(control, STARTED_INDEX, 1);
+
+		let clearSettled = false;
+		const clearPromise = world.clear().then(() => {
+			clearSettled = true;
+			return undefined;
+		});
+		try {
+			await new Promise(resolve => setTimeout(resolve, 0));
+			expect(clearSettled).toEqual(false);
+		} finally {
+			Atomics.store(control, RESUME_INDEX, 1);
+			Atomics.notify(control, RESUME_INDEX);
+			await clearPromise;
+		}
+		expect(world.entities.size).toEqual(0);
+		expect(world.registry.health.memoryComponent.length).toEqual(0);
 	});
 
 	it('empties its main-thread entity caches when the world is cleared', () => {
@@ -186,6 +234,18 @@ class SpawnSystem extends ComponentSystem<Components, { health: Int32Array }> {
 			updateFunction: spawnUpdate,
 			forceMainThread: true,
 			getWorker: () => new Worker(SPAWN_WORKER_URL, { type: 'module' }),
+		});
+	}
+}
+
+class ControlledSystem extends ComponentSystem<Components, { health: Int32Array }, ControlledWorld, ControlledInitData> {
+	constructor(world: TestWorld, control: Int32Array) {
+		super(world, {
+			name: 'ControlledSystem',
+			required: ['health'],
+			updateFunction: noopUpdate,
+			getInitData: () => ({ control }),
+			getWorker: () => new NodeWorkerAdapter(CONTROLLED_WORKER_URL) as unknown as Worker,
 		});
 	}
 }

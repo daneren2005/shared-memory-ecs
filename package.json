@@ -39,6 +39,7 @@
 		"lint": "cross-env NODE_ENV=production oxlint .",
 		"lint:fix": "cross-env NODE_ENV=production oxlint --fix .",
 		"test": "vitest run",
+		"bench": "vitest bench --run --config vitest.benchmark.config.ts",
 		"release": "semantic-release",
 		"prepare": "husky"
 	},

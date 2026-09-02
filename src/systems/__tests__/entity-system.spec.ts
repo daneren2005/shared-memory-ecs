@@ -94,6 +94,26 @@ describe('entity-system', () => {
 		errorSpy.mockRestore();
 	});
 
+	it('drains a sliced run without updating entities that left the system', () => {
+		let system = new SlicedHealthSystem(world);
+		system.maxMsPerFrame = 0;
+		world.addSystem(system);
+		let first = createEntity({ maxHealth: 10 });
+		let second = createEntity({ maxHealth: 20 });
+
+		world.update(16);
+		expect(system.isCurrentlyRunning()).toEqual(true);
+		expect(system.updated).toEqual([first.eid]);
+
+		world.removeEntity(first);
+		world.removeEntity(second);
+		world.update(16);
+
+		expect(system.isCurrentlyRunning()).toEqual(false);
+		expect(system.updated).toEqual([first.eid]);
+		expect(world.registry.health.memoryComponent.length).toEqual(0);
+	});
+
 	function createEntity(config: any): BaseEntity<Components> {
 		return world.loadEntity(config);
 	}
@@ -124,4 +144,21 @@ class StubSystem extends EntitySystem<Components> {
 	}
 
 	updateEntity(entity: BaseEntity<Components>, elapsedTime: number): void {}
+}
+
+class SlicedHealthSystem extends EntitySystem<Components> {
+	updated: Array<number> = [];
+
+	constructor(world: TestWorld) {
+		super(world, {
+			name: 'SlicedHealthSystem',
+			components: ['health'],
+			iterationsPerCheck: 1,
+			maxMsPerFrame: 0,
+		});
+	}
+
+	updateEntity(entity: BaseEntity<Components>): void {
+		this.updated.push(entity.eid);
+	}
 }

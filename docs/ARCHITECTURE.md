@@ -18,6 +18,7 @@ from `src/worker.ts` (the `/worker` subpath).
 - `npm run type-check` — `tsc --noEmit`
 - `npm run lint` — oxlint (prod config); `npm run lint:fix` to autofix
 - `npm test` — vitest (`vitest run`); worker tests use `@vitest/web-worker`
+- `npm run bench` — reproducible Vitest benchmarks at 1k/10k/100k entities; set `ECS_BENCH_SIZES` to a comma-separated subset for a smoke run
 - `npm run build` — vite build + `.d.ts` emit
 Run type-check and lint after every edit (AGENTS.md).
 
@@ -28,7 +29,7 @@ Run type-check and lint after every edit (AGENTS.md).
 | `index.ts` | Public barrel (main-thread entry). |
 | `worker.ts` | `/worker` subpath barrel — only what runs in a worker, keeps worker bundles tiny. |
 | `world.ts` | `BaseWorld<R,C,Cfg>`: owns the heap, the `constantStrings` cache, the heap-backed atomic eid counter (`allocateEid`, unique across threads), the registry (one `MemoryComponent` per component), `entities` (Map by eid), systems, the update loop, clocks (`gameTime`/`playerTime`/`timeScale`/`paused`), add/remove-entity → system wiring, the deferred component-free buffers (`deferComponentMemoryFree`/`notifySystemRunCompleted`), and reuse via `load` / async `clear` gated by the `pristine` flag. `getSharedComponentMemory()` ships each pool + the eid counter to workers; `adoptEntity()` materializes an entity a worker created off-thread. Re-emits the heap's buffer-growth as a `grow-buffer` event, and `addGrownBuffer()` adopts a buffer a worker grew (then fans it out) so worker heaps stay in sync both ways. |
-| `entity.ts` | `BaseEntity<C,Cfg>`: eid (from `world.allocateEid()`, a heap atomic — unique across threads; or a pre-minted `adoptEid` for worker-created entities) + component bag; `load`/`save`/`finishLoading`, `loadComponent` (create block from `toBlock` then `attach`), `attachComponent` (adopt a worker-written block by index — `attach` only), `removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. Both `loadComponent`/`attachComponent` ensure `component.block` holds the typed-array view (`??= memory.getBlock(index)` — a `Component` subclass already set it, a plain-object accessor gets it filled in), so query-delta building reuses this instead of re-fetching (a `getBlock` gives a fresh subarray each call) per system the entity joins. `removeComponent`/`deleteAllComponentMemory` call the definition's optional `free(component)` (release extra heap the component owns) then defer the block free to the world rather than freeing inline. EventEmitter. |
+| `entity.ts` | `BaseEntity<C,Cfg>`: eid (from `world.allocateEid()`, a heap atomic — unique across threads; or a pre-minted `adoptEid` for worker-created entities) + component bag; `load`/`save`/`finishLoading`, `loadComponent` (create block from `toBlock` then `attach`), `attachComponent` (adopt a worker-written block by index — `attach` only), `removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. Both `loadComponent`/`attachComponent` ensure `component.block` holds the typed-array view (`??= memory.getBlock(index)` — a `Component` subclass already set it, a plain-object accessor gets it filled in), so query-delta building reuses this instead of re-fetching (a `getBlock` gives a fresh subarray each call) per system the entity joins. `removeComponent`/`deleteAllComponentMemory` call the definition's optional `free(component)` (release extra heap the component owns) then defer the block free to the world rather than freeing inline; whole-entity deletion is guarded so repeated removal cannot queue the same blocks twice. EventEmitter. |
 | `entity-component.ts` | The always-present `entity` component (`type`, `dead`, `isStatic`), all worker-visible in memory. `type` is stored as a pointer to an interned `ConstantString` (see `constant-string-cache.ts`); the `type` accessor resolves it through `world.constantStrings`. Exports `DEAD_INDEX`, `STATIC_INDEX`, `TYPE_INDEX`, `entityDefinition`. |
 | `constant-string-cache.ts` | `ConstantStringCache`: interns immutable strings (from `@daneren2005/shared-memory-objects`'s `ConstantString`) in the heap and resolves a stored pointer back to its string. `getOrCreate(value)` dedupes so identical values share one allocation; `getString(pointer)` is a Map hit before rebuilding from memory. The main thread creates+interns (`world.constantStrings`); each worker reconstructs its own cache over the same buffers to resolve pointers. |
 | `entity-factory.ts` | `EntityFactory<C,Cfg>`: maps entity `type` → base config template; layers caller config over it. `loadEntity` builds + adds to world. Override `createEntity` for subclass-per-type. |
@@ -45,7 +46,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
 | --- | --- |
 | `system.ts` | `System<C>` abstract base: fixed-timestep `deltaBetweenRuns`, `update`→`run`, `shouldRun`, `firstRun`, plus the overridable `init`/`finishLoading` startup pair. `onRunFinished` (fires `world.notifySystemRunCompleted`) and `isCurrentlyRunning()` let the world's deferred free tell when a system is done with memory; `waitForRunToComplete()` (a no-op base, real promise in `ComponentSystem`) lets `world.clear()` await an in-flight run. EventEmitter (systems report a whole run in one emit). |
 | `iterable-system.ts` | `IterableSystem<C,T>`: spreads one pass over multiple frames when it exceeds `maxMsPerFrame` (`iterationsPerCheck`, `getIterables`/`updateIterable`). |
-| `entity-system.ts` | `EntitySystem<C,T>`: main-thread iteration over entities owning `options.components`; auto add/remove via world events; `entities` Map by eid; `filterEntity` skips static. |
+| `entity-system.ts` | `EntitySystem<C,T>`: main-thread iteration over entities owning `options.components`; auto add/remove via world events; `entities` Map by eid; `filterEntity` skips static. A sliced multi-frame run remains runnable until its queue drains, and revalidates each queued entity against current membership before updating it. |
 | `component-system.ts` | `ComponentSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks, and the update-function hooks (`init`/`preRun`/`entityRemoved`). The largest / most involved file. |
 
 ### Workers (`src/systems/workers/`) and actions (`src/actions/`)
@@ -111,6 +112,9 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   worker is still reading memory it is about to free. Then it removes every entity, clears every system, and
   frees **both** deferred-free buffers outright (`freeAllPendingBuffers`) rather than routing them through the
   per-update wait — safe precisely because it already waited. A pristine world resolves immediately.
+- **Idempotent entity removal:** `removeEntity(entity)` acts only when that exact instance is the world's current
+  value for its eid. Once whole-entity component deletion is scheduled, later removal/death/component-removal calls
+  cannot enqueue the same pool indexes or `free` hooks again.
 - **System startup (two phases):** `system.init()` resolves once the worker is up — `ComponentSystem` posts
   `init` in its constructor and the worker answers `init-complete`. `system.finishLoading()` then posts `load`
   carrying `getInitData()`'s result; the worker runs `updateFunction.init` and answers `loaded`. `world.init()`
@@ -200,4 +204,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
 
 Colocated `__tests__/` dirs; fixtures (sample components, workers, updates) in
 `src/__tests__/fixtures/`. Worker/system tests live under `src/systems/__tests__/` and
-`src/systems/workers/__tests__/`.
+`src/systems/workers/__tests__/`. Most worker tests use the in-process `@vitest/web-worker`
+shim; concurrency regressions use `node-worker-adapter.ts` plus `controlled-node-worker.mjs`
+to exercise a real OS thread. `world-invariants.ts` checks live/deferred pool ownership at
+quiescent test points. Benchmarks live in `benchmarks/` and have a separate Vitest config.

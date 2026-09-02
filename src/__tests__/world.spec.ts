@@ -2,6 +2,7 @@ import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
 import { System, killEntity, EntityFactory } from '../index';
 import { createTestWorld, type Components, type Config, type TestWorld } from './fixtures/components';
 import { listOf } from './fixtures/entity-collections';
+import { findWorldInvariantViolations } from './fixtures/world-invariants';
 
 describe('world eid allocation', () => {
 	it('hands out unique ids and stays consistent across a cloned-heap counter', () => {
@@ -210,6 +211,16 @@ describe('world load', () => {
 		expect(removeEntity).toHaveBeenCalledTimes(1);
 		expect(removeEntity).toHaveBeenCalledWith(entity);
 		expect(world.entities.has(entity.eid)).toEqual(false);
+	});
+
+	it('removing an entity twice never queues the same component blocks twice', () => {
+		let world = createTestWorld();
+		let entity = world.loadEntity({ maxHealth: 20 });
+
+		world.removeEntity(entity);
+		world.removeEntity(entity);
+
+		expect(findWorldInvariantViolations(world)).toEqual([]);
 	});
 
 	it('keeps the entities it is left with in the order they were added', () => {

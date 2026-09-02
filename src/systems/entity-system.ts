@@ -44,7 +44,8 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 		return iterables;
 	}
 	updateIterable(entity: T, elapsedTime: number): void {
-		if(entity.components.entity.dead) {
+		// A multi-frame snapshot can outlive query membership. Revalidate the exact instance before touching it.
+		if(entity.components.entity.dead || this.entities.get(entity.eid) !== entity) {
 			return;
 		}
 
@@ -78,7 +79,8 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 	}
 
 	shouldRun(): boolean {
-		return this.entities.size > 0;
+		// A continuation must drain even if every live member left since the previous frame.
+		return this.isCurrentlyRunning() || this.entities.size > 0;
 	}
 }
 

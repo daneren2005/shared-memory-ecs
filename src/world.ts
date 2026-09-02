@@ -230,25 +230,29 @@ export default class BaseWorld<
 			return;
 		}
 
-		for(let entity of Array.from(this.entities.values())) {
-			this.removeEntity(entity);
-		}
-		this.systems.forEach(system => system.clear());
+		// Capture and await active runs before clear() resets their state. Component blocks cannot be released while a
+		// worker still holds views over them, since the pool may immediately reuse those indexes after clear resolves.
 		await Promise.all(
 			this.systems
 				.map(system => system.waitForRunToComplete())
 				.filter(promise => promise instanceof Promise),
 		);
+		for(let entity of Array.from(this.entities.values())) {
+			this.removeEntity(entity);
+		}
+		this.systems.forEach(system => system.clear());
 		this.freeAllPendingBuffers();
 
 		this.pristine = true;
 	}
 	removeEntity(entity: BaseEntity<C, Cfg>) {
-		// delete reports whether it was actually present, so a double-remove emits entity-removed only once.
-		if(this.entities.delete(entity.eid)) {
-			this.emit('entity-removed', entity);
+		// Match the instance as well as the eid: a stale entity must not remove a newer entity that owns the same key.
+		if(this.entities.get(entity.eid) !== entity) {
+			return;
 		}
 
+		this.entities.delete(entity.eid);
+		this.emit('entity-removed', entity);
 		entity.deleteAllComponentMemory();
 	}
 	onEntityDied(entity: BaseEntity<C, Cfg>) {

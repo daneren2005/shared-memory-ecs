@@ -8,6 +8,7 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 	config?: Cfg;
 
 	world: BaseWorld<ComponentDefinitionMap, C, Cfg>;
+	private componentMemoryDeletionScheduled = false;
 	// entity is always present; game components are partial.
 	components: Partial<C> & { entity: EntityComponent } = {} as Partial<C> & { entity: EntityComponent };
 
@@ -53,6 +54,10 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 		return component;
 	}
 	removeComponent<K extends keyof C>(name: K) {
+		if(this.componentMemoryDeletionScheduled) {
+			return;
+		}
+
 		const component = (this.components as Partial<C>)[name];
 		if(component) {
 			const definition = (this.world.registry as RegisteredComponentRegistry<C>)[name];
@@ -92,6 +97,11 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 	}
 
 	deleteAllComponentMemory() {
+		if(this.componentMemoryDeletionScheduled) {
+			return;
+		}
+		this.componentMemoryDeletionScheduled = true;
+
 		const registry = this.world.registry as RegisteredComponentRegistry<C>;
 		const components = this.components as Partial<C>;
 		for(let name of Object.keys(components) as Array<keyof C>) {
