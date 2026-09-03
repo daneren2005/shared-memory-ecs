@@ -1,7 +1,7 @@
 import WebWorker from './web-worker';
 import { applyQueryDelta } from './apply-query-delta';
-import type ComponentWorkerMessage from './component-worker-message';
-import type { EntityEvent, SystemEvents, WorkerRunError } from './component-worker-message';
+import type EntitySystemWorkerMessage from './entity-system-worker-message';
+import type { EntityEvent, SystemEvents, WorkerRunError } from './entity-system-worker-message';
 import type BaseWorld from '../../world';
 import type { ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from '../../component-definition';
 import type {
@@ -11,7 +11,7 @@ import type {
 import { buildWorkerEntity, type WorkerCreateRegistry } from '../../actions/build-worker-entity';
 
 // Main-thread fallback that runs the update function synchronously, mirroring the real worker's behavior.
-export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> extends WebWorker {
+export default class EntitySystemWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> extends WebWorker {
 	private updateFunction: EntityUpdateFunction<C, T, W, D>;
 	private entities: Array<UpdateEntityConfigObject<T>> = [];
 	private queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
@@ -34,7 +34,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 		};
 	}
 
-	postMessage(message: ComponentWorkerMessage<W, D>): void {
+	postMessage(message: EntitySystemWorkerMessage<W, D>): void {
 		if(message.type === 'init') {
 			this.onMessageTyped({
 				type: 'init-complete',
@@ -149,7 +149,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 		}
 	}
 
-	onMessageTyped(message: ComponentWorkerMessage<W, D>) {
+	onMessageTyped(message: EntitySystemWorkerMessage<W, D>) {
 		this.onmessage({
 			data: message,
 		});

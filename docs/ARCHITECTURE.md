@@ -57,8 +57,8 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
 | --- | --- |
 | `workers/create-entity-system-worker.ts` | `createEntitySystemWorker(self, updateFn, registry?)` — worker entry helper. Pass the component registry only for a worker that creates entities (gives it each `toBlock`). |
 | `workers/create-system-worker.ts` | `createSystemWorker(self, runFn, registry?)` — worker entry helper for a `WorkerSystem`; wraps the single run function via `toEntityUpdateFunction` (run fn → `preRun`) and delegates to `createEntitySystemWorker`. Also the home of the `WorkerSystemRunFunction` type. Worker-safe (no main-thread system imports), so it stays in the `/worker` bundle. |
-| `workers/component-web-worker.ts` | Main-thread side of the worker (message plumbing). |
-| `workers/component-worker-message.ts` | Message + `EntityEvent`/`SystemEvents` types across the boundary. |
+| `workers/entity-system-web-worker.ts` | Main-thread side of the worker (message plumbing). |
+| `workers/entity-system-worker-message.ts` | Message + `EntityEvent`/`SystemEvents` types across the boundary. |
 | `workers/apply-query-delta.ts` | Applies query membership deltas. |
 | `workers/web-worker.ts` | `WebWorker` wrapper. |
 | `actions/kill-entity.ts` / `kill-entity-worker.ts` | Mark an entity dead (main / worker side). |
@@ -144,7 +144,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
   worker can resolve any known type even when no currently-loaded entity uses it. `world.load()`'s re-`finishLoading`
   re-ships the heap; buffers the heap grows afterward reach the worker as `grow-buffer` messages so later pointers
   still resolve. The main-thread fallback
-  (`ComponentWebWorker`) shares the world's cache directly and ignores both the shipped heap and `grow-buffer`.
+  (`EntitySystemWebWorker`) shares the world's cache directly and ignores both the shipped heap and `grow-buffer`.
 - **Off-thread allocation foundation:** the `load` message also ships `sharedMemory` (`getSharedComponentMemory()`):
   one `SharedPoolMemory` per component + the eid counter's `SharedAllocatedMemory`. A real worker reconstructs a
   `name → MemoryComponent` registry over the same pools and injects a `world.allocate` (`WorkerAllocator`) each run:

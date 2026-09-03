@@ -5,13 +5,13 @@ import type BaseEntity from '../entity';
 import type { BaseComponent, ComponentDefinitionMap, ComponentMap } from '../component-definition';
 import type { ComponentTypedArray } from '../memory-component';
 import System, { type SystemConfig } from './system';
-import type ComponentWorkerMessage from './workers/component-worker-message';
-import ComponentWebWorker from './workers/component-web-worker';
+import type EntitySystemWorkerMessage from './workers/entity-system-worker-message';
+import EntitySystemWebWorker from './workers/entity-system-web-worker';
 
 const MAIN_QUERY_NAME = '___main';
 
 // Runs an update function over the raw shared-memory blocks of its matched entities. Uses getWorker() when
-// Web Workers + SharedArrayBuffer exist, else falls back to ComponentWebWorker on the main thread. No game
+// Web Workers + SharedArrayBuffer exist, else falls back to EntitySystemWebWorker on the main thread. No game
 // concepts; games inject per-run data via addDataToWorld.
 export default abstract class EntityWorkerSystem<
 	C extends ComponentMap,
@@ -22,7 +22,7 @@ export default abstract class EntityWorkerSystem<
 	entities: Map<number, BaseEntity<C>> = new Map();
 	options: EntityWorkerSystemConfig<C, T, W, D>;
 
-	worker: Worker | ComponentWebWorker<C, T, W, D>;
+	worker: Worker | EntitySystemWebWorker<C, T, W, D>;
 	isWorkerThread: boolean;
 
 	private initialized = false;
@@ -65,7 +65,7 @@ export default abstract class EntityWorkerSystem<
 				this.worker.postMessage({ type: 'grow-buffer', buffer });
 			});
 		} else {
-			this.worker = new ComponentWebWorker(options.updateFunction, world, !!options.createsEntities);
+			this.worker = new EntitySystemWebWorker(options.updateFunction, world, !!options.createsEntities);
 			this.isWorkerThread = false;
 		}
 
@@ -74,7 +74,7 @@ export default abstract class EntityWorkerSystem<
 
 	private initWorker() {
 		this.worker.onmessage = (e: MessageEvent) => {
-			let message = e.data as ComponentWorkerMessage;
+			let message = e.data as EntitySystemWorkerMessage;
 			if(message.type === 'init-complete') {
 				this.initialized = true;
 				if(this.initPromise) {
@@ -136,7 +136,7 @@ export default abstract class EntityWorkerSystem<
 			}
 		};
 
-		const message: ComponentWorkerMessage<W, D> = {
+		const message: EntitySystemWorkerMessage<W, D> = {
 			type: 'init',
 		};
 
@@ -167,7 +167,7 @@ export default abstract class EntityWorkerSystem<
 			resolve,
 		};
 
-		const message: ComponentWorkerMessage<W, D> = {
+		const message: EntitySystemWorkerMessage<W, D> = {
 			type: 'load',
 			data: this.options.getInitData?.(),
 			// Only a real worker needs the buffers to rebuild a heap, plus the pools + eid counter to allocate off-thread.
@@ -198,7 +198,7 @@ export default abstract class EntityWorkerSystem<
 		Object.values(this.queryEntities).forEach(list => list.clear());
 		this.queryDeltas = {};
 
-		const message: ComponentWorkerMessage = { type: 'reset' };
+		const message: EntitySystemWorkerMessage = { type: 'reset' };
 		this.worker.postMessage(message);
 	}
 
@@ -239,7 +239,7 @@ export default abstract class EntityWorkerSystem<
 		Object.entries(this.options.queries ?? {}).forEach(([queryKey, query]) => {
 			queries[queryKey] = this.buildQueryDelta(queryKey, query);
 		});
-		let message: ComponentWorkerMessage<W> = {
+		let message: EntitySystemWorkerMessage<W> = {
 			type: 'run',
 			generation: this.generation,
 			world,

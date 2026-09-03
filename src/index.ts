@@ -62,8 +62,8 @@ export type {
 } from './systems/entity-worker-system';
 
 export { default as WebWorker } from './systems/workers/web-worker';
-export { default as ComponentWebWorker } from './systems/workers/component-web-worker';
+export { default as EntitySystemWebWorker } from './systems/workers/entity-system-web-worker';
 export { default as createEntitySystemWorker } from './systems/workers/create-entity-system-worker';
 export { default as createSystemWorker } from './systems/workers/create-system-worker';
-export type { default as ComponentWorkerMessage } from './systems/workers/component-worker-message';
-export type { EntityEvent, SystemEvents } from './systems/workers/component-worker-message';
+export type { default as EntitySystemWorkerMessage } from './systems/workers/entity-system-worker-message';
+export type { EntityEvent, SystemEvents } from './systems/workers/entity-system-worker-message';

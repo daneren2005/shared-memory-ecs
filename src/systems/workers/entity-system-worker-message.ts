@@ -82,6 +82,6 @@ interface EntityEventsMessage {
 	errors: Array<WorkerRunError>
 }
 
-type ComponentWorkerMessage<W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> =
+type EntitySystemWorkerMessage<W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> =
 	InitMessage | InitCompleteMessage | LoadMessage<D> | LoadedMessage | ResetMessage | GrowBufferMessage | GrowBufferFromWorkerMessage | RunUpdateMessage<W> | EntityEventsMessage;
-export default ComponentWorkerMessage;
+export default EntitySystemWorkerMessage;

@@ -18,7 +18,7 @@ interface ControlledInitData {
 
 const noopUpdate: EntityUpdateFunction<Components, { health: Int32Array }, ControlledWorld, ControlledInitData> = () => {};
 
-// Shape of a run-complete message (see component-worker-message.ts). Filled with empty defaults so each test
+// Shape of a run-complete message (see entity-system-worker-message.ts). Filled with empty defaults so each test
 // only specifies the part it exercises.
 interface RunCompletePayload {
 	generation: number
@@ -65,7 +65,7 @@ async function waitForAtomicValue(control: Int32Array, index: number, expected: 
 // cover an EntityWorkerSystem un-initializing across that boundary — its main-thread caches, the worker's persistent
 // lists, and the generation guard that drops a worker run still in flight when the reload happened.
 //
-// forceMainThread runs the (synchronous) ComponentWebWorker so the reset and run round-trips are deterministic.
+// forceMainThread runs the (synchronous) EntitySystemWebWorker so the reset and run round-trips are deterministic.
 describe('entity-worker-system world reuse', () => {
 	let world: TestWorld;
 	let systems: Array<System<Components>>;

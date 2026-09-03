@@ -19,7 +19,7 @@ const QUERY_TARGET_WORKER_URL = new URL('../../__tests__/fixtures/query-target.w
 const TYPE_READ_WORKER_URL = new URL('../../__tests__/fixtures/type-read.worker.ts', import.meta.url);
 const ERROR_WORKER_URL = new URL('../../__tests__/fixtures/error.worker.ts', import.meta.url);
 
-// Every test runs against both backends: 'main-thread' (ComponentWebWorker) and 'worker' (a real worker
+// Every test runs against both backends: 'main-thread' (EntitySystemWebWorker) and 'worker' (a real worker
 // module). Both must produce identical observable behavior.
 type Mode = 'main-thread' | 'worker';
 const MODES: Array<Mode> = ['main-thread', 'worker'];

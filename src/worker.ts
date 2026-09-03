@@ -2,15 +2,15 @@
 // tree-shake a barrel, so importing from index.ts would drag the whole library into every worker bundle. This
 // re-exports only what worker code uses, keeping those bundles tiny.
 export { default as createEntitySystemWorker } from './systems/workers/create-entity-system-worker';
-export type { ComponentWorkerScope } from './systems/workers/create-entity-system-worker';
+export type { EntitySystemWorkerScope } from './systems/workers/create-entity-system-worker';
 export { default as createSystemWorker } from './systems/workers/create-system-worker';
 export type { WorkerSystemRunFunction } from './systems/workers/create-system-worker';
 export { default as createEntityWorker } from './actions/create-entity-worker';
 export { default as killEntityWorker } from './actions/kill-entity-worker';
 export { DEAD_INDEX, TYPE_INDEX } from './entity-component';
 
-export type { default as ComponentWorkerMessage } from './systems/workers/component-worker-message';
-export type { EntityEvent, SystemEvents } from './systems/workers/component-worker-message';
+export type { default as EntitySystemWorkerMessage } from './systems/workers/entity-system-worker-message';
+export type { EntityEvent, SystemEvents } from './systems/workers/entity-system-worker-message';
 export type {
 	EntityWorkerSystemWorld,
 	EntityWorkerSystemCallbacks,

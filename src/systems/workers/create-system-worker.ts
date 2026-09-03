@@ -1,4 +1,4 @@
-import createEntitySystemWorker, { type ComponentWorkerScope } from './create-entity-system-worker';
+import createEntitySystemWorker, { type EntitySystemWorkerScope } from './create-entity-system-worker';
 import type { ComponentDefinitionMap, ComponentMap } from '../../component-definition';
 import type {
 	EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityQueryComponents, EntityUpdateComponents,
@@ -41,6 +41,6 @@ export default function createSystemWorker<
 	C extends ComponentMap,
 	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
->(scope: ComponentWorkerScope, runFunction: WorkerSystemRunFunction<C, W, D>, definitions?: ComponentDefinitionMap) {
+>(scope: EntitySystemWorkerScope, runFunction: WorkerSystemRunFunction<C, W, D>, definitions?: ComponentDefinitionMap) {
 	createEntitySystemWorker(scope, toEntityUpdateFunction(runFunction), definitions);
 }
