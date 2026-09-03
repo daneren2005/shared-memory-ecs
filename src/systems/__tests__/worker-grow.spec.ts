@@ -1,4 +1,4 @@
-import { BaseWorld, ComponentSystem } from '../../index';
+import { BaseWorld, EntityWorkerSystem } from '../../index';
 import { registry, type Components } from '../../__tests__/fixtures/components';
 import { growUpdate, GROW_COUNT } from '../../__tests__/fixtures/grow-update';
 
@@ -9,7 +9,7 @@ function flush(): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, 0));
 }
 
-class GrowSystem extends ComponentSystem<Components, { health: Int32Array }> {
+class GrowSystem extends EntityWorkerSystem<Components, { health: Int32Array }> {
 	constructor(world: BaseWorld<typeof registry>) {
 		super(world, {
 			name: 'GrowSystem',
@@ -53,7 +53,7 @@ describe('worker buffer-growth propagation', () => {
 
 	it('allocates through the main-thread fallback without a worker', () => {
 		const world = new BaseWorld(registry, { heapSize: 16 * 1024 });
-		const system = new (class extends ComponentSystem<Components, { health: Int32Array }> {
+		const system = new (class extends EntityWorkerSystem<Components, { health: Int32Array }> {
 			constructor() {
 				super(world, {
 					name: 'GrowSystemMain',

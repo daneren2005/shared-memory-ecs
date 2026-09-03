@@ -1,6 +1,6 @@
 import type { MemoryHeapMemory, GrowBufferData } from '@daneren2005/shared-memory-objects/memory-heap';
 import type { WorldSharedMemory } from '../../world';
-import type { ComponentSystemWorld, QueryDelta, WorkerCreatedEntity } from '../component-system';
+import type { EntityWorkerSystemWorld, QueryDelta, WorkerCreatedEntity } from '../entity-worker-system';
 
 interface InitMessage {
 	type: 'init'
@@ -44,7 +44,7 @@ interface ResetMessage {
 	type: 'reset'
 }
 
-interface RunUpdateMessage<W extends ComponentSystemWorld = ComponentSystemWorld> {
+interface RunUpdateMessage<W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld> {
 	type: 'run'
 	generation: number
 	world: W
@@ -82,6 +82,6 @@ interface EntityEventsMessage {
 	errors: Array<WorkerRunError>
 }
 
-type ComponentWorkerMessage<W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> =
+type ComponentWorkerMessage<W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> =
 	InitMessage | InitCompleteMessage | LoadMessage<D> | LoadedMessage | ResetMessage | GrowBufferMessage | GrowBufferFromWorkerMessage | RunUpdateMessage<W> | EntityEventsMessage;
 export default ComponentWorkerMessage;

@@ -1,4 +1,4 @@
-import { System, ComponentSystem } from '../index';
+import { System, EntityWorkerSystem } from '../index';
 import { createTestWorld, type Components, type TestWorld } from './fixtures/components';
 import { damageUpdate, type DamageWorld, type DamageInitData } from './fixtures/damage-update';
 
@@ -21,8 +21,8 @@ class CountingSystem extends System<Components> {
 }
 
 // forceMainThread so the worker round-trip is synchronous and deterministic, while still driving the real
-// ComponentSystem completion path (completedRuns is bumped on the worker's run-complete, not in update()).
-class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
+// EntityWorkerSystem completion path (completedRuns is bumped on the worker's run-complete, not in update()).
+class DamageSystem extends EntityWorkerSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
 	constructor(world: TestWorld) {
 		super(world, {
 			name: 'DamageSystem',
@@ -147,7 +147,7 @@ describe('deferred component memory free', () => {
 		}
 	});
 
-	it('waits for a ComponentSystem\'s worker run to complete before freeing', () => {
+	it('waits for an EntityWorkerSystem\'s worker run to complete before freeing', () => {
 		let world = createTestWorld();
 		let system = new DamageSystem(world);
 		world.addSystem(system);

@@ -1,5 +1,5 @@
-import { ComponentSystem, TYPE_INDEX } from '../../index';
-import type { BaseEntity, ComponentSystemQuery, System } from '../../index';
+import { EntityWorkerSystem, TYPE_INDEX } from '../../index';
+import type { BaseEntity, EntityWorkerSystemQuery, System } from '../../index';
 import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
 import { eidsOf, listOf } from '../../__tests__/fixtures/entity-collections';
 import { damageUpdate, DAMAGED_ENTITIES_EVENT, type DamageWorld, type DamageInitData } from '../../__tests__/fixtures/damage-update';
@@ -27,7 +27,7 @@ const MODES: Array<Mode> = ['main-thread', 'worker'];
 interface StubOptions {
 	required: Array<keyof Components>
 	not?: Array<keyof Components>
-	queries?: { [key: string]: ComponentSystemQuery<Components> }
+	queries?: { [key: string]: EntityWorkerSystemQuery<Components> }
 }
 
 // Waits a macrotask for a worker-mode run-complete message; a noop wait in main-thread mode.
@@ -41,7 +41,7 @@ async function initSystem(system: System<Components>): Promise<void> {
 	await system.finishLoading();
 }
 
-describe.each(MODES)('component-system (%s)', (mode) => {
+describe.each(MODES)('entity-worker-system (%s)', (mode) => {
 	let world: TestWorld;
 	let systems: Array<System<Components>>;
 	beforeEach(() => {
@@ -53,7 +53,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 	});
 
 	// Bounded on the non-generic `System` base so it accepts systems that narrow `T` (invariant on
-	// ComponentSystem), which aren't assignable to the wide default.
+	// EntityWorkerSystem), which aren't assignable to the wide default.
 	function useSystem<S extends System<Components>>(system: S): S {
 		systems.push(system);
 		world.addSystem(system);
@@ -667,7 +667,7 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 	});
 });
 
-class StubSystem extends ComponentSystem<Components, {}> {
+class StubSystem extends EntityWorkerSystem<Components, {}> {
 	constructor(world: TestWorld, mode: Mode, options: StubOptions) {
 		super(world, {
 			name: 'StubSystem',
@@ -696,7 +696,7 @@ class StubSystem extends ComponentSystem<Components, {}> {
 	}
 }
 
-class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
+class DamageSystem extends EntityWorkerSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
 	damagePerRun?: number;
 
 	constructor(world: TestWorld, mode: Mode, initDamage?: number) {
@@ -717,7 +717,7 @@ class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, D
 	}
 }
 
-class KillSystem extends ComponentSystem<Components, { health: Int32Array, entity?: Uint32Array }> {
+class KillSystem extends EntityWorkerSystem<Components, { health: Int32Array, entity?: Uint32Array }> {
 	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
 			name: 'KillSystem',
@@ -731,7 +731,7 @@ class KillSystem extends ComponentSystem<Components, { health: Int32Array, entit
 	}
 }
 
-class SpawnSystem extends ComponentSystem<Components, { health: Int32Array }> {
+class SpawnSystem extends EntityWorkerSystem<Components, { health: Int32Array }> {
 	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
 			name: 'SpawnSystem',
@@ -744,7 +744,7 @@ class SpawnSystem extends ComponentSystem<Components, { health: Int32Array }> {
 	}
 }
 
-class QueryTargetSystem extends ComponentSystem<Components, { movement: Float32Array }> {
+class QueryTargetSystem extends EntityWorkerSystem<Components, { movement: Float32Array }> {
 	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
 			name: 'QueryTargetSystem',
@@ -764,7 +764,7 @@ class QueryTargetSystem extends ComponentSystem<Components, { movement: Float32A
 	}
 }
 
-class ErrorSystem extends ComponentSystem<Components, { health: Int32Array }, ErrorWorld> {
+class ErrorSystem extends EntityWorkerSystem<Components, { health: Int32Array }, ErrorWorld> {
 	failPreRun = false;
 
 	constructor(world: TestWorld, mode: Mode) {
@@ -782,7 +782,7 @@ class ErrorSystem extends ComponentSystem<Components, { health: Int32Array }, Er
 	}
 }
 
-class TypeReadSystem extends ComponentSystem<Components, { entity: Uint32Array }> {
+class TypeReadSystem extends EntityWorkerSystem<Components, { entity: Uint32Array }> {
 	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
 			name: 'TypeReadSystem',

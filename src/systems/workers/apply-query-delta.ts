@@ -1,4 +1,4 @@
-import type { EntityUpdateComponents, QueryDelta, UpdateEntityConfigObject } from '../component-system';
+import type { EntityUpdateComponents, QueryDelta, UpdateEntityConfigObject } from '../entity-worker-system';
 
 // Applies a run's delta to a query's persistent list: drop the entities that left, upsert those that joined or
 // changed. A steady-state run carries empty arrays and returns the list untouched. Returns the list (removals

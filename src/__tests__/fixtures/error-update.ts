@@ -1,11 +1,11 @@
-import type { ComponentSystemWorld, EntityUpdateFunction } from '../../index';
+import type { EntityWorkerSystemWorld, EntityUpdateFunction } from '../../index';
 import type { ComponentArrays, Components } from './components';
 
 // Drives the error-handling tests: an entity whose maxHealth is POISON_MAX_HEALTH throws from its update body,
 // so a run mixes failing and succeeding entities. preRun throws when world.failPreRun is set.
 export const POISON_MAX_HEALTH = 13;
 
-export interface ErrorWorld extends ComponentSystemWorld {
+export interface ErrorWorld extends EntityWorkerSystemWorld {
 	failPreRun?: boolean
 }
 

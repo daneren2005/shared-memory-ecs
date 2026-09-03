@@ -1,4 +1,4 @@
-import type { WorkerAllocator, WorkerCreateEntityConfig, WorkerCreatedEntity } from '../systems/component-system';
+import type { WorkerAllocator, WorkerCreateEntityConfig, WorkerCreatedEntity } from '../systems/entity-worker-system';
 
 // The slice of a component definition worker-side creation needs. Both the game's ComponentDefinitionMap and the
 // world's RegisteredComponentRegistry satisfy it.

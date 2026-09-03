@@ -1,6 +1,6 @@
 import { bench, describe } from 'vitest';
-import { BaseWorld, ComponentSystem, EntitySystem, System } from '../src/index';
-import type { BaseEntity, ComponentSystemCallbacks, ComponentSystemWorld, EntityUpdateFunction } from '../src/index';
+import { BaseWorld, EntityWorkerSystem, EntitySystem, System } from '../src/index';
+import type { BaseEntity, EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityUpdateFunction } from '../src/index';
 import { registry, type Components, type TestWorld } from '../src/__tests__/fixtures/components';
 
 const configuredSizes = process.env.ECS_BENCH_SIZES?.split(',').map(Number).filter(Number.isFinite);
@@ -9,19 +9,19 @@ const BENCH_OPTIONS = { time: 100, iterations: 5, warmupTime: 25, warmupIteratio
 
 const noopUpdate: EntityUpdateFunction<Components, { health: Int32Array }> = () => {};
 const eventUpdate: EntityUpdateFunction<Components, { health: Int32Array }> = (
-	_world: ComponentSystemWorld,
+	_world: EntityWorkerSystemWorld,
 	entityId: number,
 	_components: { health: Int32Array },
 	_queries,
-	callbacks: ComponentSystemCallbacks<Components>,
+	callbacks: EntityWorkerSystemCallbacks<Components>,
 ) => {
 	callbacks.emitSystemEvent('touched', entityId);
 };
 
-class BenchComponentSystem extends ComponentSystem<Components, { health: Int32Array }> {
+class BenchEntityWorkerSystem extends EntityWorkerSystem<Components, { health: Int32Array }> {
 	constructor(world: TestWorld, updateFunction = noopUpdate) {
 		super(world, {
-			name: 'BenchComponentSystem',
+			name: 'BenchEntityWorkerSystem',
 			required: ['health'],
 			optional: ['movement'],
 			updateFunction,
@@ -65,10 +65,10 @@ function populatedWorld(size: number): TestWorld {
 for(const size of SIZES) {
 	describe(`core ECS (${size.toLocaleString()} entities)`, () => {
 		let stableWorld: TestWorld;
-		let stableSystem: BenchComponentSystem;
+		let stableSystem: BenchEntityWorkerSystem;
 		let iterableWorld: TestWorld;
 		let eventWorld: TestWorld;
-		let eventSystem: BenchComponentSystem;
+		let eventSystem: BenchEntityWorkerSystem;
 		let dispatchWorld: TestWorld;
 		let churnEntities: Array<BaseEntity<Components>>;
 		let churnHasMovement = false;
@@ -80,14 +80,14 @@ for(const size of SIZES) {
 			}
 			initialized = true;
 			stableWorld = populatedWorld(size);
-			stableSystem = stableWorld.addSystem(new BenchComponentSystem(stableWorld));
+			stableSystem = stableWorld.addSystem(new BenchEntityWorkerSystem(stableWorld));
 			stableSystem.run(0);
 
 			iterableWorld = populatedWorld(size);
 			iterableWorld.addSystem(new BenchEntitySystem(iterableWorld));
 
 			eventWorld = populatedWorld(size);
-			eventSystem = eventWorld.addSystem(new BenchComponentSystem(eventWorld, eventUpdate));
+			eventSystem = eventWorld.addSystem(new BenchEntityWorkerSystem(eventWorld, eventUpdate));
 			eventSystem.on('touched', () => {});
 
 			dispatchWorld = new BaseWorld(registry);
@@ -98,7 +98,7 @@ for(const size of SIZES) {
 			churnEntities = Array.from(stableWorld.entities.values()).slice(0, Math.max(1, Math.floor(size / 100)));
 		}
 
-		bench('stable ComponentSystem query', () => {
+		bench('stable EntityWorkerSystem query', () => {
 			initialize();
 			stableWorld.update(16);
 		}, BENCH_OPTIONS);

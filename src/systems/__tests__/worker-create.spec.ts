@@ -1,4 +1,4 @@
-import { ComponentSystem, EntityFactory } from '../../index';
+import { EntityWorkerSystem, EntityFactory } from '../../index';
 import type { System } from '../../index';
 import { createTestWorld, type Components, type Config, type TestWorld } from '../../__tests__/fixtures/components';
 import { listOf } from '../../__tests__/fixtures/entity-collections';
@@ -13,7 +13,7 @@ function flush(): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, 0));
 }
 
-class CreateMultiSystem extends ComponentSystem<Components, { movement: Float32Array }> {
+class CreateMultiSystem extends EntityWorkerSystem<Components, { movement: Float32Array }> {
 	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
 			name: 'CreateMultiSystem',

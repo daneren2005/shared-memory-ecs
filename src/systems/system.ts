@@ -25,7 +25,7 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 	clear() {
 		this.currentDelta = 0;
 	}
-	// Called once the world's entities all exist: the point a system hands its startup data off (see ComponentSystem).
+	// Called once the world's entities all exist: the point a system hands its startup data off (see EntityWorkerSystem).
 	finishLoading(): void | Promise<void> {}
 
 	update(elapsedTime: number): boolean {

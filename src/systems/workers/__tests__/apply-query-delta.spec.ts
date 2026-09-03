@@ -1,5 +1,5 @@
 import { applyQueryDelta } from '../apply-query-delta';
-import type { UpdateEntityConfigObject } from '../../component-system';
+import type { UpdateEntityConfigObject } from '../../entity-worker-system';
 
 type Entry = UpdateEntityConfigObject<{ health: Int32Array }>;
 function entry(entityId: number): Entry {

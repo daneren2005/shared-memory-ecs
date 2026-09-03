@@ -1,4 +1,4 @@
-import { System, ComponentSystem } from '../index';
+import { System, EntityWorkerSystem } from '../index';
 import { createTestWorld, type Components, type TestWorld } from './fixtures/components';
 import { damageUpdate, type DamageWorld, type DamageInitData } from './fixtures/damage-update';
 
@@ -18,7 +18,7 @@ class CountingSystem extends System<Components> {
 }
 
 // forceMainThread keeps the worker round-trip synchronous so the test stays deterministic.
-class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
+class DamageSystem extends EntityWorkerSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
 	constructor(world: TestWorld) {
 		super(world, {
 			name: 'DamageSystem',

@@ -1,5 +1,5 @@
-import { ComponentSystem } from '../../index';
-import type { ComponentSystemWorld, EntityUpdateFunction, System } from '../../index';
+import { EntityWorkerSystem } from '../../index';
+import type { EntityWorkerSystemWorld, EntityUpdateFunction, System } from '../../index';
 import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
 import NodeWorkerAdapter from '../../__tests__/fixtures/node-worker-adapter';
 import { damageUpdate, DAMAGED_ENTITIES_EVENT, type DamageWorld, type DamageInitData } from '../../__tests__/fixtures/damage-update';
@@ -11,7 +11,7 @@ const CONTROLLED_WORKER_URL = new URL('../../__tests__/fixtures/controlled-node-
 const STARTED_INDEX = 0;
 const RESUME_INDEX = 1;
 
-type ControlledWorld = ComponentSystemWorld;
+type ControlledWorld = EntityWorkerSystemWorld;
 interface ControlledInitData {
 	control: Int32Array
 }
@@ -30,7 +30,7 @@ interface RunCompletePayload {
 // Delivers a run-complete to the system's own message handler, exactly as its worker does when a run finishes.
 // Used to model a run that was in flight across a world.load() (clear + reload) and only reports back afterwards:
 // a real worker's reply is always async, so it necessarily lands after the synchronous load() call.
-function deliverRunComplete<S extends ComponentSystem<Components, any, any, any>>(system: S, payload: RunCompletePayload) {
+function deliverRunComplete<S extends EntityWorkerSystem<Components, any, any, any>>(system: S, payload: RunCompletePayload) {
 	const worker = system.worker as unknown as { onmessage: (e: { data: unknown }) => void };
 	worker.onmessage({
 		data: {
@@ -44,10 +44,10 @@ function deliverRunComplete<S extends ComponentSystem<Components, any, any, any>
 	});
 }
 
-function generationOf(system: ComponentSystem<Components, any, any, any>): number {
+function generationOf(system: EntityWorkerSystem<Components, any, any, any>): number {
 	return Reflect.get(system, 'generation') as number;
 }
-function workerEntityCount(system: ComponentSystem<Components, any, any, any>): number {
+function workerEntityCount(system: EntityWorkerSystem<Components, any, any, any>): number {
 	return (Reflect.get(system.worker, 'entities') as Array<unknown>).length;
 }
 
@@ -62,11 +62,11 @@ async function waitForAtomicValue(control: Int32Array, index: number, expected: 
 }
 
 // A World is meant to be reused: world.load() clears the old contents and loads a fresh scenario. These tests
-// cover a ComponentSystem un-initializing across that boundary — its main-thread caches, the worker's persistent
+// cover an EntityWorkerSystem un-initializing across that boundary — its main-thread caches, the worker's persistent
 // lists, and the generation guard that drops a worker run still in flight when the reload happened.
 //
 // forceMainThread runs the (synchronous) ComponentWebWorker so the reset and run round-trips are deterministic.
-describe('component-system world reuse', () => {
+describe('entity-worker-system world reuse', () => {
 	let world: TestWorld;
 	let systems: Array<System<Components>>;
 	beforeEach(() => {
@@ -214,7 +214,7 @@ describe('component-system world reuse', () => {
 	});
 });
 
-class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
+class DamageSystem extends EntityWorkerSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
 	constructor(world: TestWorld) {
 		super(world, {
 			name: 'DamageSystem',
@@ -226,7 +226,7 @@ class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, D
 	}
 }
 
-class SpawnSystem extends ComponentSystem<Components, { health: Int32Array }> {
+class SpawnSystem extends EntityWorkerSystem<Components, { health: Int32Array }> {
 	constructor(world: TestWorld) {
 		super(world, {
 			name: 'SpawnSystem',
@@ -238,7 +238,7 @@ class SpawnSystem extends ComponentSystem<Components, { health: Int32Array }> {
 	}
 }
 
-class ControlledSystem extends ComponentSystem<Components, { health: Int32Array }, ControlledWorld, ControlledInitData> {
+class ControlledSystem extends EntityWorkerSystem<Components, { health: Int32Array }, ControlledWorld, ControlledInitData> {
 	constructor(world: TestWorld, control: Int32Array) {
 		super(world, {
 			name: 'ControlledSystem',

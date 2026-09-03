@@ -1,7 +1,7 @@
-import type { ComponentSystemWorld, EntityUpdateFunction } from '../../index';
+import type { EntityWorkerSystemWorld, EntityUpdateFunction } from '../../index';
 import type { ComponentArrays, Components } from './components';
 
-export interface DamageWorld extends ComponentSystemWorld {
+export interface DamageWorld extends EntityWorkerSystemWorld {
 	damage?: number
 }
 
@@ -9,7 +9,7 @@ export interface DamageInitData {
 	damage?: number
 }
 
-// Shared update logic both ComponentSystem backends run, so they stay behavior-identical. Subtracts
+// Shared update logic both EntityWorkerSystem backends run, so they stay behavior-identical. Subtracts
 // world.damage (default 1) from health and reports the change back through the callbacks.
 export const DAMAGED_ENTITIES_EVENT = 'damaged-entities';
 

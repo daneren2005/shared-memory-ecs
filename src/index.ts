@@ -40,12 +40,14 @@ export { default as IterableSystem } from './systems/iterable-system';
 export type { IterableSystemConfig } from './systems/iterable-system';
 export { default as EntitySystem } from './systems/entity-system';
 export type { EntitySystemConfig } from './systems/entity-system';
-export { default as ComponentSystem } from './systems/component-system';
+export { default as EntityWorkerSystem } from './systems/entity-worker-system';
+export { default as WorkerSystem } from './systems/worker-system';
+export type { WorkerSystemConfig, WorkerSystemRunFunction } from './systems/worker-system';
 export type {
-	ComponentSystemConfig,
-	ComponentSystemQuery,
-	ComponentSystemWorld,
-	ComponentSystemCallbacks,
+	EntityWorkerSystemConfig,
+	EntityWorkerSystemQuery,
+	EntityWorkerSystemWorld,
+	EntityWorkerSystemCallbacks,
 	WorkerAllocator,
 	WorkerCreateEntityConfig,
 	WorkerCreatedEntity,
@@ -57,10 +59,11 @@ export type {
 	EntityRemovedFunction,
 	UpdateEntityConfig,
 	UpdateEntityConfigObject,
-} from './systems/component-system';
+} from './systems/entity-worker-system';
 
 export { default as WebWorker } from './systems/workers/web-worker';
 export { default as ComponentWebWorker } from './systems/workers/component-web-worker';
-export { default as createComponentWorker } from './systems/workers/create-component-worker';
+export { default as createEntitySystemWorker } from './systems/workers/create-entity-system-worker';
+export { default as createSystemWorker } from './systems/workers/create-system-worker';
 export type { default as ComponentWorkerMessage } from './systems/workers/component-worker-message';
 export type { EntityEvent, SystemEvents } from './systems/workers/component-worker-message';

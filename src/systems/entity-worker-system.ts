@@ -13,14 +13,14 @@ const MAIN_QUERY_NAME = '___main';
 // Runs an update function over the raw shared-memory blocks of its matched entities. Uses getWorker() when
 // Web Workers + SharedArrayBuffer exist, else falls back to ComponentWebWorker on the main thread. No game
 // concepts; games inject per-run data via addDataToWorld.
-export default abstract class ComponentSystem<
+export default abstract class EntityWorkerSystem<
 	C extends ComponentMap,
 	T extends EntityUpdateComponents<C>,
-	W extends ComponentSystemWorld = ComponentSystemWorld,
+	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
 > extends System<C> {
 	entities: Map<number, BaseEntity<C>> = new Map();
-	options: ComponentSystemConfig<C, T, W, D>;
+	options: EntityWorkerSystemConfig<C, T, W, D>;
 
 	worker: Worker | ComponentWebWorker<C, T, W, D>;
 	isWorkerThread: boolean;
@@ -32,14 +32,14 @@ export default abstract class ComponentSystem<
 	private isRunning = false;
 	// Bumped by clear(); checked on each event to make certain we are dealing with the correct world
 	private generation = 0;
-	private queryEntities: { [key: string]: Map<number, BaseEntity<C>> } = {};
+	protected queryEntities: { [key: string]: Map<number, BaseEntity<C>> } = {};
 	// Membership changes since the last run(), flushed each run as a delta so a steady-state run sends empty
 	// arrays rather than re-transmitting every eid. The worker applies these to its own list (see applyQueryDelta).
 	private queryDeltas: { [key: string]: MembershipDelta<C> } = {};
 
 	addDataToWorld?(world: W): void;
 
-	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: ComponentSystemConfig<C, T, W, D>) {
+	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: EntityWorkerSystemConfig<C, T, W, D>) {
 		super(world, options);
 		this.options = options;
 		Object.keys(this.options.queries ?? {}).forEach(queryName => {
@@ -249,7 +249,7 @@ export default abstract class ComponentSystem<
 		this.worker.postMessage(message);
 	}
 
-	private buildQueryDelta(queryName: string, query: ComponentSystemQuery<C>): QueryDelta<T> {
+	private buildQueryDelta(queryName: string, query: EntityWorkerSystemQuery<C>): QueryDelta<T> {
 		const delta = this.getQueryDelta(queryName);
 		const added: Array<UpdateEntityConfigObject<T>> = [];
 		delta.added.forEach(entity => {
@@ -263,7 +263,7 @@ export default abstract class ComponentSystem<
 
 		return { added, removed };
 	}
-	private buildComponents(entity: BaseEntity<C>, query: ComponentSystemQuery<C>): T {
+	private buildComponents(entity: BaseEntity<C>, query: EntityWorkerSystemQuery<C>): T {
 		const components = {} as T;
 		[
 			...query.required,
@@ -283,7 +283,7 @@ export default abstract class ComponentSystem<
 	isEntityInSystem(entity: BaseEntity<C>) {
 		return this.entities.has(entity.eid);
 	}
-	private matchesQuery(entity: BaseEntity<C>, query: ComponentSystemQuery<C>): boolean {
+	protected matchesQuery(entity: BaseEntity<C>, query: EntityWorkerSystemQuery<C>): boolean {
 		if(entity.components.entity.dead) {
 			return false;
 		}
@@ -320,7 +320,7 @@ export default abstract class ComponentSystem<
 
 		delta.removed.add(entity.eid);
 	}
-	private updateEntityList(queryName: string, list: Map<number, BaseEntity<C>>, entity: BaseEntity<C>, shouldInclude: boolean) {
+	protected updateEntityList(queryName: string, list: Map<number, BaseEntity<C>>, entity: BaseEntity<C>, shouldInclude: boolean) {
 		const delta = this.getQueryDelta(queryName);
 		if(shouldInclude) {
 			list.set(entity.eid, entity);
@@ -376,34 +376,34 @@ interface Resolvable {
 
 export type EntityUpdateComponents<C extends ComponentMap = ComponentMap> = { [K in keyof C]?: ComponentTypedArray };
 export type EntityQueryComponents<C extends ComponentMap = ComponentMap> = { [key: string]: Array<{ entityId: number, components: EntityUpdateComponents<C> }> };
-type EntityUpdateFunctionImpl<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> = (
+type EntityUpdateFunctionImpl<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld> = (
 	world: W,
 	entityId: number,
 	components: T,
 	queries: EntityQueryComponents<C>,
-	callbacks: ComponentSystemCallbacks<C>,
+	callbacks: EntityWorkerSystemCallbacks<C>,
 ) => void;
 export type EntityUpdateFunction<
 	C extends ComponentMap,
 	T extends EntityUpdateComponents<C>,
-	W extends ComponentSystemWorld = ComponentSystemWorld,
+	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
 > = EntityUpdateFunctionImpl<C, T, W> & {
 	preRun?: EntityUpdatePreRunFunction<C, T, W>
 	entityRemoved?: EntityRemovedFunction<C, W>
 	init?: EntityUpdateInitFunction<W, D>
 };
-export type EntityUpdateInitFunction<W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> = (data: D | undefined) => Partial<W> | void;
-export type EntityUpdatePreRunFunction<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld> = (
+export type EntityUpdateInitFunction<W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> = (data: D | undefined) => Partial<W> | void;
+export type EntityUpdatePreRunFunction<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld> = (
 	world: W,
 	entities: Array<UpdateEntityConfigObject<T>>,
 	queries: EntityQueryComponents<C>,
-	callbacks: ComponentSystemCallbacks<C>,
+	callbacks: EntityWorkerSystemCallbacks<C>,
 ) => void;
-export type EntityRemovedFunction<C extends ComponentMap = ComponentMap, W extends ComponentSystemWorld = ComponentSystemWorld> = (
+export type EntityRemovedFunction<C extends ComponentMap = ComponentMap, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld> = (
 	world: W,
 	entityId: number,
-	callbacks: ComponentSystemCallbacks<C>,
+	callbacks: EntityWorkerSystemCallbacks<C>,
 ) => void;
 export type UpdateEntityConfig<T extends EntityUpdateComponents = EntityUpdateComponents> = number | UpdateEntityConfigObject<T>;
 export type UpdateEntityConfigObject<T extends EntityUpdateComponents> = {
@@ -430,7 +430,7 @@ export interface WorkerAllocator {
 	allocateComponentBlock(name: string, values: Array<number>): number
 }
 
-export interface ComponentSystemWorld {
+export interface EntityWorkerSystemWorld {
 	gameTime: number
 	elapsedTime: number
 	getString(pointer: number): string
@@ -457,7 +457,7 @@ export interface WorkerCreatedEntity {
 	components: { [name: string]: number }
 }
 
-export interface ComponentSystemCallbacks<C extends ComponentMap = ComponentMap> {
+export interface EntityWorkerSystemCallbacks<C extends ComponentMap = ComponentMap> {
 	entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]): void
 	// Args are structured-cloned, so plain values only.
 	emitEntityEvent(entityId: number, event: string, ...args: Array<unknown>): void
@@ -468,29 +468,29 @@ export interface ComponentSystemCallbacks<C extends ComponentMap = ComponentMap>
 	createEntity(entity: WorkerCreatedEntity): void
 }
 
-export interface ComponentSystemQuery<C extends ComponentMap = ComponentMap> {
+export interface EntityWorkerSystemQuery<C extends ComponentMap = ComponentMap> {
 	required: Array<keyof C>
 	optional?: Array<keyof C>
 	not?: Array<keyof C>
 	filter?: (entity: BaseEntity<C>) => boolean
 }
 
-export interface ComponentSystemConfig<
+export interface EntityWorkerSystemConfig<
 	C extends ComponentMap,
 	T extends EntityUpdateComponents<C>,
-	W extends ComponentSystemWorld = ComponentSystemWorld,
+	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
-> extends SystemConfig, ComponentSystemQuery<C> {
+> extends SystemConfig, EntityWorkerSystemQuery<C> {
 	updateFunction: EntityUpdateFunction<C, T, W, D>
 	getWorker: () => Worker
 	forceMainThread?: boolean
 	getInitData?: () => D
 	// Opt in to worker-side entity creation (createEntityWorker). When set, the factory configs are shipped to this
 	// system's worker on load so it can merge templates; the worker entry must also pass the component registry to
-	// createComponentWorker so it has each component's toBlock(). Only systems that create entities need either.
+	// createEntitySystemWorker so it has each component's toBlock(). Only systems that create entities need either.
 	createsEntities?: boolean
 
-	queries?: { [key: string]: ComponentSystemQuery<C> }
+	queries?: { [key: string]: EntityWorkerSystemQuery<C> }
 }
 
 export type { BaseComponent };

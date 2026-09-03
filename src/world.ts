@@ -10,8 +10,8 @@ import ConstantStringCache from './constant-string-cache';
 import BaseEntity from './entity';
 import type System from './systems/system';
 import EntitySystem from './systems/entity-system';
-import ComponentSystem from './systems/component-system';
-import type { WorkerCreatedEntity } from './systems/component-system';
+import EntityWorkerSystem from './systems/entity-worker-system';
+import type { WorkerCreatedEntity } from './systems/entity-worker-system';
 import type {
 	BaseComponent, ComponentDefinitionMap, ComponentMap, ComponentRegistry, ComponentsOf,
 	EntityConfigOf, RegisteredComponentDefinition, RegisteredComponentRegistry,
@@ -138,11 +138,11 @@ export default class BaseWorld<
 		this.emit('grow-buffer', data);
 	}
 
-	// Only an off-thread ComponentSystem that creates entities allocates in a worker, so only then is a pre-fanned-out
+	// Only an off-thread EntityWorkerSystem that creates entities allocates in a worker, so only then is a pre-fanned-out
 	// spare buffer worth keeping (growing one otherwise just wastes a whole buffer). The main-thread fallback allocates
 	// on the main thread, where growth fans out inline, so it never needs one.
 	private get needsSpareBuffer(): boolean {
-		return this.systems.some(system => system instanceof ComponentSystem && system.isWorkerThread && !!system.options.createsEntities);
+		return this.systems.some(system => system instanceof EntityWorkerSystem && system.isWorkerThread && !!system.options.createsEntities);
 	}
 
 	async init() {
@@ -159,10 +159,10 @@ export default class BaseWorld<
 		this.pristine = false;
 
 		entity.on('component-added', (name: keyof C) => {
-			this.addEntityToComponentSystem(entity, name);
+			this.addEntityToEntityWorkerSystem(entity, name);
 		});
 		entity.on('component-removed', (name: keyof C) => {
-			this.removeEntityFromComponentSystem(entity, name);
+			this.removeEntityFromEntityWorkerSystem(entity, name);
 		});
 
 		if(created) {
@@ -222,7 +222,7 @@ export default class BaseWorld<
 		this.playerTime = config.playerTime ?? 0;
 		this.timeScale = config.timeScale ?? 1;
 
-		// ComponentSystem re-sends its init data here.
+		// EntityWorkerSystem re-sends its init data here.
 		void this.finishLoadingSystems();
 	}
 	async clear(): Promise<void> {
@@ -455,29 +455,29 @@ export default class BaseWorld<
 		this.paused = false;
 	}
 
-	addEntityToComponentSystem(entity: BaseEntity<C>, component: keyof C) {
+	addEntityToEntityWorkerSystem(entity: BaseEntity<C>, component: keyof C) {
 		this.systems.forEach(system => {
 			if(system instanceof EntitySystem && system.options.components?.includes(component)) {
 				system.checkAddEntity(entity);
-			} else if(system instanceof ComponentSystem) {
-				if(this.componentAffectsComponentSystem(system, component)) {
+			} else if(system instanceof EntityWorkerSystem) {
+				if(this.componentAffectsEntityWorkerSystem(system, component)) {
 					system.checkAddEntity(entity);
 				}
 			}
 		});
 	}
-	removeEntityFromComponentSystem(entity: BaseEntity<C>, component: keyof C) {
+	removeEntityFromEntityWorkerSystem(entity: BaseEntity<C>, component: keyof C) {
 		this.systems.forEach(system => {
 			if(system instanceof EntitySystem && system.options.components?.includes(component)) {
 				system.removeEntity(entity);
-			} else if(system instanceof ComponentSystem) {
-				if(this.componentAffectsComponentSystem(system, component)) {
+			} else if(system instanceof EntityWorkerSystem) {
+				if(this.componentAffectsEntityWorkerSystem(system, component)) {
 					system.checkAddEntity(entity);
 				}
 			}
 		});
 	}
-	private componentAffectsComponentSystem(system: ComponentSystem<C, any>, component: keyof C): boolean {
+	private componentAffectsEntityWorkerSystem(system: EntityWorkerSystem<C, any>, component: keyof C): boolean {
 		const affectsMainQuery = system.options.required.includes(component)
 			|| !!system.options.not?.includes(component)
 			|| !!system.options.optional?.includes(component);

@@ -32,8 +32,9 @@ fog of war, sub-classed entities, required components, etc).
   direct property accessors and only loads/saves component data. Every entity has an `entity` component
   whose `type` (a plain, worker-invisible string) records the factory template it was built from.
 - **Systems** – `System`, `IterableSystem`, `EntitySystem` (main-thread iteration over entities with a
-  given set of components) and `ComponentSystem` (runs an update function over raw memory blocks,
-  off-thread when Web Workers + `SharedArrayBuffer` are available).
+  given set of components), `EntityWorkerSystem` (runs an update function over raw memory blocks,
+  off-thread when Web Workers + `SharedArrayBuffer` are available), and `WorkerSystem` (an `EntityWorkerSystem`
+  that runs once per tick over its sub-queries instead of once per entity — see [Per-tick systems](#per-tick-systems-workersystem)).
 
 ## Defining components
 
@@ -134,7 +135,7 @@ resolves that pointer back to the string through the world's cache; a worker can
 ## Iterating entities
 
 `world.entities` is a `Map` keyed by `eid`, not an array, and so is `entities` on `EntitySystem` and
-`ComponentSystem`:
+`EntityWorkerSystem`:
 
 ```ts
 world.entities.forEach(entity => { ... });   // in the order they were added
@@ -188,25 +189,25 @@ physics library exports its `*_INDEX` constants.
 Reach for this when a profile says to, not by default. A menu, a save, a system that touches a dozen entities:
 use the accessors.
 
-## ComponentSystem workers
+## EntityWorkerSystem workers
 
-`ComponentSystem` needs a `getWorker()` that returns a real `Worker`, and an `updateFunction`. Your
-worker entry file calls `createComponentWorker(self, updateFunction)`, importing it from the
+`EntityWorkerSystem` needs a `getWorker()` that returns a real `Worker`, and an `updateFunction`. Your
+worker entry file calls `createEntitySystemWorker(self, updateFunction)`, importing it from the
 [`/worker` subpath](#importing-in-workers) so the worker bundle stays small. When Web Workers or
 `SharedArrayBuffer` are unavailable it transparently falls back to running the same update function on
 the main thread. Attach any extra per-run data (the equivalent of the old faction/fog-of-war fields)
 by overriding `addDataToWorld(world)`. Declare its shape with the `W` type parameter (an interface
-extending `ComponentSystemWorld`) so both `addDataToWorld` and the `updateFunction` see it typed:
+extending `EntityWorkerSystemWorld`) so both `addDataToWorld` and the `updateFunction` see it typed:
 
 ```ts
-interface DamageWorld extends ComponentSystemWorld {
+interface DamageWorld extends EntityWorkerSystemWorld {
 	damage: number
 }
 
 const damageUpdate: EntityUpdateFunction<Components, { health: Int32Array }, DamageWorld> =
 	(world, entityId, components) => { components.health[0] -= world.damage; };
 
-class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld> {
+class DamageSystem extends EntityWorkerSystem<Components, { health: Int32Array }, DamageWorld> {
 	addDataToWorld(world: DamageWorld) { world.damage = 5; }
 }
 ```
@@ -222,11 +223,11 @@ itself. Both are optional properties on the `EntityUpdateFunction`.
 (structured-cloned across the boundary) and returns a `Partial<W>` that is merged onto `world` on every
 subsequent run. Use it for state that must be seeded from the main thread but then persist inside the worker
 — a seeded RNG, a lookup table, a config object — without paying to re-send it each frame. Type the init
-data with the `D` type parameter (the fourth on `EntityUpdateFunction` / `ComponentSystem`) so `getInitData`
+data with the `D` type parameter (the fourth on `EntityUpdateFunction` / `EntityWorkerSystem`) so `getInitData`
 and the `init` hook agree on its shape; it defaults to `unknown` when a system has no init data:
 
 ```ts
-interface DamageWorld extends ComponentSystemWorld {
+interface DamageWorld extends EntityWorkerSystemWorld {
 	damage: number
 }
 interface DamageInitData {
@@ -240,7 +241,7 @@ const damageUpdate: EntityUpdateFunction<Components, { health: Int32Array }, Dam
 // `DamageInitData | undefined` (undefined when the system supplies no getInitData).
 damageUpdate.init = (data) => ({ damage: data?.baseDamage ?? 1 });
 
-class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
+class DamageSystem extends EntityWorkerSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
 	constructor(world: BaseWorld<Components>) {
 		super(world, {
 			name: 'DamageSystem',
@@ -255,7 +256,7 @@ class DamageSystem extends ComponentSystem<Components, { health: Int32Array }, D
 ```
 
 Unlike `addDataToWorld` (an overridable method on the system), `getInitData` is a config option — it lives in
-the options passed to the `ComponentSystem` constructor, so a system used without a subclass can supply it
+the options passed to the `EntityWorkerSystem` constructor, so a system used without a subclass can supply it
 there directly.
 
 **`preRun`** runs once per run, before any entity is updated, with the run's `world`, the full entity list,
@@ -272,31 +273,75 @@ damageUpdate.preRun = (world, entities, queries, callbacks) => {
 (An `entityRemoved(world, entityId, callbacks)` hook completes the set — it fires once per entity that left
 the system this run, so a worker can release any per-entity state it was holding.)
 
+### Per-tick systems: `WorkerSystem`
+
+Some systems have no entities of their own — they run **once per tick** to scan or count other entities, and
+maybe spawn something. A `WorkerSystem` is an `EntityWorkerSystem` whose function is called **once per run** over
+the named sub-queries instead of once per entity. It has no main query, so it runs every interval even with
+zero entities, and it reuses the whole worker/query/`createsEntities`/`addDataToWorld` machinery:
+
+```ts
+// once per run: no per-entity loop, just the queries
+const spawnerUpdate: WorkerSystemRunFunction<Components, SpawnerWorld> = (world, queries, callbacks) => {
+	const asteroids = queries.asteroids ?? [];
+	if(asteroids.length < world.minAsteroids) {
+		createEntityWorker(world, { type: 'asteroid', x: 0, y: 0 }, callbacks);
+	}
+};
+
+class SpawnerSystem extends WorkerSystem<Components, SpawnerWorld> {
+	minAsteroids = 20;
+	constructor(world: TestWorld) {
+		super(world, {
+			name: 'Spawner',
+			updateFunction: spawnerUpdate,
+			createsEntities: true,
+			deltaBetweenRuns: 1000,
+			getWorker: () => new Worker(SPAWNER_WORKER_URL, { type: 'module' }),
+			queries: { asteroids: { required: ['asteroid'] } },
+		});
+	}
+	// Fresh per-run data — structured-cloned to the worker each run, so keep it plain/cloneable.
+	addDataToWorld(world: SpawnerWorld) { world.minAsteroids = this.minAsteroids; }
+}
+```
+
+Its worker entry uses `createSystemWorker` (the run-function counterpart of `createEntitySystemWorker`),
+passing the registry only when it creates entities:
+
+```ts
+import { createSystemWorker } from '@daneren2005/shared-memory-ecs/worker';
+createSystemWorker(self, spawnerUpdate, registry);
+```
+
+The run function may carry the same `init` / `entityRemoved` hooks as an `updateFunction`. Everything else —
+callbacks, worker fallback, off-thread creation — behaves exactly as an `EntityWorkerSystem`.
+
 ### Importing in workers
 
 Each worker entry file is bundled on its own, and a single-entry bundle cannot tree-shake this package's
-barrel: importing `createComponentWorker` from `@daneren2005/shared-memory-ecs` drags the whole library -
+barrel: importing `createEntitySystemWorker` from `@daneren2005/shared-memory-ecs` drags the whole library -
 `BaseWorld`, every system, their `@daneren2005/shared-memory-objects` dependencies - into the worker, even
 though a worker never runs any of it (easily ~20kb of dead code per worker). Import worker-side helpers from
 the `@daneren2005/shared-memory-ecs/worker` subpath instead. It exposes only what runs in a worker -
-`createComponentWorker`, `createEntityWorker`, `killEntityWorker`, `DEAD_INDEX`, `TYPE_INDEX` (plus the
-worker-relevant types) - so the bundle stays tiny:
+`createEntitySystemWorker`, `createSystemWorker`, `createEntityWorker`, `killEntityWorker`, `DEAD_INDEX`,
+`TYPE_INDEX` (plus the worker-relevant types) - so the bundle stays tiny:
 
 ```ts
 // damage.worker.ts - the worker entry file
-import { createComponentWorker } from '@daneren2005/shared-memory-ecs/worker';
+import { createEntitySystemWorker } from '@daneren2005/shared-memory-ecs/worker';
 import { damageUpdate } from './damage-update';
 
-createComponentWorker(self, damageUpdate);
+createEntitySystemWorker(self, damageUpdate);
 ```
 
 The same applies to any module the worker file pulls in: an update function that calls `createEntityWorker`
 or `killEntityWorker` should import them from `/worker` too. Type-only imports (`EntityUpdateFunction`,
-`ComponentSystemWorld`, ...) can come from either path since types are erased, and main-thread code
-(`ComponentSystem`, `BaseWorld`, `EntityFactory`, ...) keeps importing from the package root.
+`EntityWorkerSystemWorld`, ...) can come from either path since types are erased, and main-thread code
+(`EntityWorkerSystem`, `BaseWorld`, `EntityFactory`, ...) keeps importing from the package root.
 
 A worker that creates entities (see [Creating entities from a worker](#creating-entities-from-a-worker)) passes
-your component registry as the third argument - `createComponentWorker(self, shipUpdate, registry)` - so it has
+your component registry as the third argument - `createEntitySystemWorker(self, shipUpdate, registry)` - so it has
 each component's `toBlock`. Only do this in workers that actually create entities; it pulls the registry (and
 whatever it imports) into that worker's bundle.
 
@@ -316,7 +361,7 @@ const update: EntityUpdateFunction<Components, { entity: Uint32Array }> = (world
 	// ...branch on type, etc.
 };
 
-class TypedSystem extends ComponentSystem<Components, { entity: Uint32Array }> {
+class TypedSystem extends EntityWorkerSystem<Components, { entity: Uint32Array }> {
 	constructor(world: BaseWorld<Components>) {
 		super(world, { name: 'TypedSystem', required: ['entity'], updateFunction: update, getWorker: () => new Worker(/* ... */) });
 	}
@@ -412,11 +457,11 @@ exists on the following frame, so the system picks it up next run.
 Two things make this work, both opt-in so only the workers that create entities pay for them:
 
 - Register the system with `createsEntities: true`. That ships the factory templates to its worker on load.
-- In that system's worker entry, pass your component registry to `createComponentWorker`, so the worker has
+- In that system's worker entry, pass your component registry to `createEntitySystemWorker`, so the worker has
   each component's block builder:
 
   ```ts
-  createComponentWorker(self, shipUpdate, registry);
+  createEntitySystemWorker(self, shipUpdate, registry);
   ```
 
 Every component is already defined as two halves for exactly this — `toBlock(config)` (the block values) and

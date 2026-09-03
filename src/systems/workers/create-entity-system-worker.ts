@@ -6,23 +6,23 @@ import ConstantStringCache from '../../constant-string-cache';
 import MemoryComponent from '../../memory-component';
 import type { ComponentDefinitionMap, ComponentMap } from '../../component-definition';
 import type {
-	ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents,
+	EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityQueryComponents, EntityUpdateComponents,
 	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerCreatedEntity,
-} from '../component-system';
+} from '../entity-worker-system';
 import { buildWorkerEntity, type FactoryConfigs } from '../../actions/build-worker-entity';
 import { applyQueryDelta } from './apply-query-delta';
 
-// The slice of the worker global scope createComponentWorker touches. Passing `self` explicitly (rather than
+// The slice of the worker global scope createEntitySystemWorker touches. Passing `self` explicitly (rather than
 // using the global) lets runners like @vitest/web-worker, which inject `self` as a module local, drive it.
 export interface ComponentWorkerScope {
 	onmessage: ((e: MessageEvent) => void) | null
 	postMessage(message: ComponentWorkerMessage): void
 }
 
-export default function createComponentWorker<
+export default function createEntitySystemWorker<
 	C extends ComponentMap,
 	T extends EntityUpdateComponents<C>,
-	W extends ComponentSystemWorld = ComponentSystemWorld,
+	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
 >(scope: ComponentWorkerScope, updateFunction: EntityUpdateFunction<C, T, W, D>, definitions?: ComponentDefinitionMap) {
 	// Persistent lists, carried across runs and mutated by each run's delta (see applyQueryDelta).
@@ -111,7 +111,7 @@ export default function createComponentWorker<
 				queries[queryKey] = list;
 			});
 
-			let callbacks: ComponentSystemCallbacks<C> = {
+			let callbacks: EntityWorkerSystemCallbacks<C> = {
 				entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]) {
 					entityEvents.push({
 						entityId,

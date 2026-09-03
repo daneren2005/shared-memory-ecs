@@ -1,4 +1,4 @@
-import { ComponentSystem } from '../../index';
+import { EntityWorkerSystem } from '../../index';
 import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
 import { damageUpdate, type DamageInitData, type DamageWorld } from '../../__tests__/fixtures/damage-update';
 
@@ -6,7 +6,7 @@ const DAMAGE_WORKER_URL = new URL('../../__tests__/fixtures/damage.worker.ts', i
 
 type Mode = 'main-thread' | 'worker';
 
-class ParitySystem extends ComponentSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
+class ParitySystem extends EntityWorkerSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
 	constructor(world: TestWorld, mode: Mode) {
 		super(world, {
 			name: 'ParitySystem',
@@ -63,7 +63,7 @@ async function runScenario(mode: Mode): Promise<ScenarioResult> {
 	return result;
 }
 
-describe('ComponentSystem backend parity', () => {
+describe('EntityWorkerSystem backend parity', () => {
 	it('matches fallback and worker behavior across query churn and callbacks', async () => {
 		const fallback = await runScenario('main-thread');
 		const worker = await runScenario('worker');

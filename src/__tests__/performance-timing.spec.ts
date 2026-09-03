@@ -182,7 +182,7 @@ describe('performance timing', () => {
 });
 
 // Fakes one worker run of `name` (taking `runTime`) whose events then take `eventTime`, via the same events
-// ComponentSystem emits around a dispatch.
+// EntityWorkerSystem emits around a dispatch.
 function emitRun(world: TestWorld, name: string, runTime: number, eventTime: number) {
 	clock.unshift(0, eventTime);
 	world.emit(`system-${name}-worker-finished`, runTime);

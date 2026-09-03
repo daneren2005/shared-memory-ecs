@@ -5,17 +5,17 @@ import type { EntityEvent, SystemEvents, WorkerRunError } from './component-work
 import type BaseWorld from '../../world';
 import type { ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from '../../component-definition';
 import type {
-	ComponentSystemCallbacks, ComponentSystemWorld, EntityQueryComponents, EntityUpdateComponents,
+	EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityQueryComponents, EntityUpdateComponents,
 	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerAllocator, WorkerCreatedEntity,
-} from '../component-system';
+} from '../entity-worker-system';
 import { buildWorkerEntity, type WorkerCreateRegistry } from '../../actions/build-worker-entity';
 
 // Main-thread fallback that runs the update function synchronously, mirroring the real worker's behavior.
-export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends ComponentSystemWorld = ComponentSystemWorld, D = unknown> extends WebWorker {
+export default class ComponentWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> extends WebWorker {
 	private updateFunction: EntityUpdateFunction<C, T, W, D>;
 	private entities: Array<UpdateEntityConfigObject<T>> = [];
 	private queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
-	// Mirrors createComponentWorker: updateFunction.init's result, merged onto `world` each run.
+	// Mirrors createEntitySystemWorker: updateFunction.init's result, merged onto `world` each run.
 	private worldExtension: Partial<W> | undefined;
 	// Running on the main thread, this shares the world (its string cache, registry pools, eid counter) directly.
 	private world: BaseWorld<ComponentDefinitionMap, C>;
@@ -75,7 +75,7 @@ export default class ComponentWebWorker<C extends ComponentMap, T extends Entity
 				queries[queryKey] = list;
 			});
 
-			let callbacks: ComponentSystemCallbacks<C> = {
+			let callbacks: EntityWorkerSystemCallbacks<C> = {
 				entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]) {
 					entityEvents.push({
 						entityId,

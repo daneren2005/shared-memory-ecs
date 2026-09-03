@@ -9,7 +9,7 @@ the library); this is the *internal* map. Keep it current — see AGENTS.md.
 An engine-agnostic Entity/Component/System core backed by shared memory
 (`@daneren2005/shared-memory-objects`). No game concepts (factions, terrain, etc.).
 Components store data in typed-array blocks inside one shared `MemoryHeap`, so
-`ComponentSystem` update functions can run off-thread in a Web Worker over the same
+`EntityWorkerSystem` update functions can run off-thread in a Web Worker over the same
 memory. Public surface is re-exported from `src/index.ts`; the worker-only surface
 from `src/worker.ts` (the `/worker` subpath).
 
@@ -40,20 +40,23 @@ Run type-check and lint after every edit (AGENTS.md).
 
 ### Systems (`src/systems/`)
 
-Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` extends `IterableSystem` too.
+Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem` extends `IterableSystem` too;
+`WorkerSystem` extends `EntityWorkerSystem`.
 
 | File | Responsibility |
 | --- | --- |
-| `system.ts` | `System<C>` abstract base: fixed-timestep `deltaBetweenRuns`, `update`→`run`, `shouldRun`, `firstRun`, plus the overridable `init`/`finishLoading` startup pair. `onRunFinished` (fires `world.notifySystemRunCompleted`) and `isCurrentlyRunning()` let the world's deferred free tell when a system is done with memory; `waitForRunToComplete()` (a no-op base, real promise in `ComponentSystem`) lets `world.clear()` await an in-flight run. EventEmitter (systems report a whole run in one emit). |
+| `system.ts` | `System<C>` abstract base: fixed-timestep `deltaBetweenRuns`, `update`→`run`, `shouldRun`, `firstRun`, plus the overridable `init`/`finishLoading` startup pair. `onRunFinished` (fires `world.notifySystemRunCompleted`) and `isCurrentlyRunning()` let the world's deferred free tell when a system is done with memory; `waitForRunToComplete()` (a no-op base, real promise in `EntityWorkerSystem`) lets `world.clear()` await an in-flight run. EventEmitter (systems report a whole run in one emit). |
 | `iterable-system.ts` | `IterableSystem<C,T>`: spreads one pass over multiple frames when it exceeds `maxMsPerFrame` (`iterationsPerCheck`, `getIterables`/`updateIterable`). |
 | `entity-system.ts` | `EntitySystem<C,T>`: main-thread iteration over entities owning `options.components`; auto add/remove via world events; `entities` Map by eid; `filterEntity` skips static. A sliced multi-frame run remains runnable until its queue drains, and revalidates each queued entity against current membership before updating it. |
-| `component-system.ts` | `ComponentSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks, and the update-function hooks (`init`/`preRun`/`entityRemoved`). The largest / most involved file. |
+| `entity-worker-system.ts` | `EntityWorkerSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks, and the update-function hooks (`init`/`preRun`/`entityRemoved`). The largest / most involved file. |
+| `worker-system.ts` | `WorkerSystem<C,W,D>`: an `EntityWorkerSystem` that calls its function **once per run** over the named sub-queries instead of once per entity. It has **no main query** (`required` is forced `[]`, `checkAddEntity` never populates `this.entities`), and `shouldRun()` is always `true` so the `deltaBetweenRuns` cadence drives one run per interval even with zero entities. Reuses the whole EntityWorkerSystem worker/query/`createsEntities`/`addDataToWorld` machinery: the single run function `(world, queries, callbacks)` is wrapped as the update function's `preRun` (per-entity body a no-op) by `toEntityUpdateFunction`. Fresh per-run data is the existing `addDataToWorld(world)` channel (structured-cloned each run, so plain/cloneable). |
 
 ### Workers (`src/systems/workers/`) and actions (`src/actions/`)
 
 | File | Responsibility |
 | --- | --- |
-| `workers/create-component-worker.ts` | `createComponentWorker(self, updateFn, registry?)` — worker entry helper. Pass the component registry only for a worker that creates entities (gives it each `toBlock`). |
+| `workers/create-entity-system-worker.ts` | `createEntitySystemWorker(self, updateFn, registry?)` — worker entry helper. Pass the component registry only for a worker that creates entities (gives it each `toBlock`). |
+| `workers/create-system-worker.ts` | `createSystemWorker(self, runFn, registry?)` — worker entry helper for a `WorkerSystem`; wraps the single run function via `toEntityUpdateFunction` (run fn → `preRun`) and delegates to `createEntitySystemWorker`. Also the home of the `WorkerSystemRunFunction` type. Worker-safe (no main-thread system imports), so it stays in the `/worker` bundle. |
 | `workers/component-web-worker.ts` | Main-thread side of the worker (message plumbing). |
 | `workers/component-worker-message.ts` | Message + `EntityEvent`/`SystemEvents` types across the boundary. |
 | `workers/apply-query-delta.ts` | Applies query membership deltas. |
@@ -79,11 +82,11 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   entity loop entirely. Every failure surfaces on the main thread as a `world.emit('system-error', SystemError)`
   ({ system, error, entityId?, phase? }) — `System.onError` does the log + emit. In a real worker the errors are
   collected during the run and shipped back in the `run-complete` message (`errors: WorkerRunError[]`), then
-  `ComponentSystem` replays them through `onError` on the main thread. The world's own coarse try/catch around
+  `EntityWorkerSystem` replays them through `onError` on the main thread. The world's own coarse try/catch around
   `system.update()` still catches structural (non-user-code) failures and emits the same event with `phase: 'run'`
   (plus the existing `lastSystemError` return).
 - **Entity death:** both kill paths funnel through `world.onEntityDied(entity)` via the entity's `death` event —
-  the worker path (`killEntityWorker` flags `DEAD_INDEX`, reports a `death` event that `ComponentSystem` replays as
+  the worker path (`killEntityWorker` flags `DEAD_INDEX`, reports a `death` event that `EntityWorkerSystem` replays as
   `entity.emit('death')` on run-complete, before it adopts newly-created entities) and the main-thread `killEntity`
   (emits `death` directly). `onEntityDied` guards on `world.entities.get(eid) === entity` so a second death for the
   same eid in one run (two projectiles, one target) is a no-op, then — while every block is still live (only
@@ -111,7 +114,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   waiting on and frees anyway rather than leak. `world.load()` routes all pending frees through the same wait so
   the reloaded world's systems each run once before the old blocks can be reused (see `consolidateFreeBuffersForReload`).
 - **Clear / reuse:** `world.load()` removes every entity then calls `system.clear()` before loading the new
-  batch. `ComponentSystem.clear()` resets `isRunning`, empties its main-thread caches (`entities`,
+  batch. `EntityWorkerSystem.clear()` resets `isRunning`, empties its main-thread caches (`entities`,
   `queryEntities`, `queryDeltas`), posts `reset` to drop the worker's persistent lists, and bumps a `generation`
   counter. Each `run` message carries the current `generation` and the worker echoes it on `run-complete`; a
   reply whose generation no longer matches is dropped, so a run still in flight when the world was reloaded can't
@@ -119,7 +122,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   flipped false the moment any entity is added) lets `load`/`clear` skip this whole teardown when there is
   nothing to tear down.
 - **Async `world.clear()`:** tears the world back to a pristine, reusable state and resolves once it is safe to
-  reuse. It first awaits `system.waitForRunToComplete()` on every system (only an off-thread `ComponentSystem`
+  reuse. It first awaits `system.waitForRunToComplete()` on every system (only an off-thread `EntityWorkerSystem`
   mid-run returns a real promise; main-thread systems are never truly mid-run between `update()` calls), so no
   worker is still reading memory it is about to free. Then it removes every entity, clears every system, and
   frees **both** deferred-free buffers outright (`freeAllPendingBuffers`) rather than routing them through the
@@ -127,7 +130,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
 - **Idempotent entity removal:** `removeEntity(entity)` acts only when that exact instance is the world's current
   value for its eid. Once whole-entity component deletion is scheduled, later removal/death/component-removal calls
   cannot enqueue the same pool indexes or `free` hooks again.
-- **System startup (two phases):** `system.init()` resolves once the worker is up — `ComponentSystem` posts
+- **System startup (two phases):** `system.init()` resolves once the worker is up — `EntityWorkerSystem` posts
   `init` in its constructor and the worker answers `init-complete`. `system.finishLoading()` then posts `load`
   carrying `getInitData()`'s result; the worker runs `updateFunction.init` and answers `loaded`. `world.init()`
   awaits both in order, and `world.load()` re-runs `finishLoading` so a reused world re-seeds its workers.
@@ -147,7 +150,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   `name → MemoryComponent` registry over the same pools and injects a `world.allocate` (`WorkerAllocator`) each run:
   `allocateEid()` (heap atomic) and `allocateComponentBlock(name, values)` (pushes into the shared pool). The fallback
   mirrors this over `world.registry`/`allocateEid` directly. When a worker's allocation grows the heap, it posts
-  `grow-buffer-from-worker`; `ComponentSystem` forwards it to `world.addGrownBuffer`, which adopts the buffer and
+  `grow-buffer-from-worker`; `EntityWorkerSystem` forwards it to `world.addGrownBuffer`, which adopts the buffer and
   re-emits `grow-buffer` to fan it out to sibling workers. Growth is idempotent: neither the world nor a worker
   replaces a buffer position it already holds (the originating worker ignores the echo of its own buffer). This is the
   substrate for worker-side entity creation (below).
@@ -157,7 +160,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   runs out of room mid-run and calls `growBuffer`, it writes pointers (a new pool chunk's `pointerStack` entry) into
   a buffer only it holds; any *other* thread that reads such a pointer before the buffer message arrives dereferences
   `heap.buffers[pos] === undefined` and throws. To prevent this, `world.runUpdate` calls `heap.ensureSpareBuffer()`
-  **before dispatching any run** (gated on `needsSpareBuffer`: at least one off-thread `ComponentSystem` with
+  **before dispatching any run** (gated on `needsSpareBuffer`: at least one off-thread `EntityWorkerSystem` with
   `createsEntities`). `ensureSpareBuffer` (in shared-memory-objects) grows one empty buffer on the **main thread** if
   none is free (cheap `MemoryBuffer.isEmpty` scan), firing the grow handlers so the `grow-buffer` message is queued to
   every worker *before* its `run` message (postMessage is FIFO) — so a worker's allocations always land in a buffer
@@ -178,7 +181,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   re-allocated (a component's own extra allocations, if any, live in `attach`, so they happen the same way whether
   loaded or adopted). It then `addEntity`s the entity so it joins systems via
   `entity-added` on the next frame. Two opt-ins gate it: the system's `createsEntities: true` (ships the factory
-  configs to its worker on load) and the worker entry passing the component registry to `createComponentWorker` (so
+  configs to its worker on load) and the worker entry passing the component registry to `createEntitySystemWorker` (so
   the worker has each `toBlock`). Runs identically on the main-thread fallback (same `buildWorkerEntity`, over
   `world.registry`/`world.factory.configs`). Adopted entities are always the base `BaseEntity`; the factory's per-type
   subclass is not applied.
@@ -195,7 +198,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
 
 ## Conventions / gotchas
 
-- `world.entities` (and `EntitySystem`/`ComponentSystem` `entities`) are **Maps keyed by
+- `world.entities` (and `EntitySystem`/`EntityWorkerSystem` `entities`) are **Maps keyed by
   eid**, not arrays — deletes are O(1) and this replaced the old `entitiesByEid`. Iterate
   with `.forEach`/`.values()`; use `Array.from(...values())` for array methods.
 - Every entity always has the `entity` component; game components are partial.
@@ -205,7 +208,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `ComponentSystem` e
   getters (monomorphic, inlinable), so the gap is far smaller than the old closure accessors, but a raw indexed
   read still wins the tightest loops. See README "Reading components on a hot path".
 - `getBlock(index)` allocates a **fresh subarray view every call**, so it is not free. A live component caches
-  its view on `component.block` at attach; reuse that rather than re-fetching (`ComponentSystem.buildComponents`
+  its view on `component.block` at attach; reuse that rather than re-fetching (`EntityWorkerSystem.buildComponents`
   relies on it, which is what keeps spawn-heavy query-delta building off the main thread's back).
 - Worker entry files and anything they import must import from `@daneren2005/shared-memory-ecs/worker`,
   not the root barrel, or the whole library is dragged into the worker bundle.
