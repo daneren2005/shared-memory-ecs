@@ -2,6 +2,7 @@ import type { TypedArrayConstructor } from '@daneren2005/shared-memory-objects/i
 import type MemoryComponent from './memory-component';
 import type { ComponentTypedArray } from './memory-component';
 import type BaseEntity from './entity';
+import type BaseWorld from './world';
 import type { EntityComponent, EntityComponentConfig, EntityComponentSerialization } from './entity-component';
 
 // `index` points at the backing block in the MemoryComponent pool, reachable via
@@ -39,6 +40,8 @@ export interface ComponentDefinition<
 	save?(component: Component): Serialization
 	// Called when the component is torn down (removeComponent, or the entity being removed/killed/cleared)
 	free?(component: Component): void
+	// Fires once on the main thread when the entity dies
+	died?(component: Component, entity: BaseEntity, world: BaseWorld): void
 }
 
 export type RegisteredComponentDefinition<

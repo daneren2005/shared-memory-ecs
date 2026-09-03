@@ -421,6 +421,26 @@ describe.each(MODES)('component-system (%s)', (mode) => {
 			expect(system.isEntityInSystem(entity)).toEqual(false);
 		});
 
+		it('fires a died hook on the main thread when a worker system kills an entity', async () => {
+			let system = useSystem(new KillSystem(world, mode));
+			await initSystem(system);
+
+			let died = vi.fn<() => void>();
+			world.registry.health.died = (component, entity) => {
+				// Killing only flags the entity dead; the health block is untouched and still readable here.
+				expect(component.health).toEqual(100);
+				expect(world.entities.get(entity.eid)).toBe(entity);
+				died();
+			};
+
+			let entity = createEntity({ maxHealth: 100 });
+			system.run(16);
+			await flush();
+
+			expect(died).toHaveBeenCalledTimes(1);
+			expect(world.entities.has(entity.eid)).toEqual(false);
+		});
+
 		it('createEntityWorker adds the requested entity to the world', async () => {
 			let system = useSystem(new SpawnSystem(world, mode));
 			await initSystem(system);

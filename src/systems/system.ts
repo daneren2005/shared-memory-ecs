@@ -88,7 +88,7 @@ export interface SystemConfig {
 }
 
 // Which part of a run threw, for the `system-error` event.
-export type SystemErrorPhase = 'preRun' | 'update' | 'entityRemoved' | 'run';
+export type SystemErrorPhase = 'preRun' | 'update' | 'entityRemoved' | 'run' | 'died';
 export interface SystemError {
 	system: string
 	error: Error

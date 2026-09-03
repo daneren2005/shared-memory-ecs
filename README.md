@@ -14,10 +14,12 @@ fog of war, sub-classed entities, required components, etc).
   config to the raw block values) and `attach(entity, memory, index)` (builds the accessor over that block).
   Loading a component is `attach(entity, memory, memory.create(toBlock(config)))`; splitting it this way lets a
   worker build the block off-thread (it calls only `toBlock`) and the main thread wrap it (`attach`) when it
-  adopts the entity. Plus an optional `save(component)` and `free(component)`. A component's data splits into
-  `Config` (defining props supplied up front, e.g. `maxHealth`) and `Serialization` (runtime-derived state,
-  e.g. current `health`); `toBlock` sees `Config & Serialization` while `save` returns only the `Serialization`
-  slice. `free` runs when the component is torn down (see [Freeing extra resources](#freeing-extra-resources)).
+  adopts the entity. Plus an optional `save(component)`, `free(component)`, and `died(component, entity, world)`.
+  A component's data splits into `Config` (defining props supplied up front, e.g. `maxHealth`) and
+  `Serialization` (runtime-derived state, e.g. current `health`); `toBlock` sees `Config & Serialization` while
+  `save` returns only the `Serialization` slice. `free` runs when the component is torn down (see
+  [Freeing extra resources](#freeing-extra-resources)); `died` runs when the entity is killed, with it still
+  readable (see [Reacting to death](#reacting-to-death)).
 - **`ComponentRegistry<C>`** – the map of all component definitions for a game.
 - **`EntityFactory<C>`** – maps an entity `type` name to a base (template) config. Loading an entity layers
   the caller's config over its type's template, so shared static data lives in one place and a save only
@@ -484,6 +486,35 @@ entity — `removeEntity`, a `death` (from `killEntity`), a `load` that drops th
 It is deferred to the same safe point as the component's own block (see above), not fired the instant the
 entity dies — so a system still mid-run over that memory can't see your resource released early. Reload calls
 it without any `death` event, so it is the reliable place to avoid leaks when a world is reused.
+
+### Reacting to death
+
+To *react* when an entity dies — spawn drops at its position, credit a kill, play an effect — a component
+definition can carry an optional `died(component, entity, world)`. It fires exactly once per death, on the main
+thread, with the dying entity **still fully readable** (its blocks are only *deferred*-freed, never torn down
+before the hook runs), for both a worker kill (`killEntityWorker`) and a main-thread `killEntity`:
+
+```ts
+const oreDepositDefinition: ComponentDefinition<OreDeposit, Int32Array, OreDepositConfig> = {
+  type: Int32Array,
+  size: 3,
+  loadProperties: ['oreAmount'],
+  toBlock(config) { /* ... */ },
+  attach(entity, memory, index) { /* ... */ },
+  died(component, entity, world) {
+    // The asteroid is still readable here, so spawn its drop where it was.
+    const { x, y } = entity.components.position!;
+    world.loadEntity({ type: 'Ore', x, y, amount: component.oreAmount });
+  },
+};
+```
+
+The hook is engine-agnostic: attach death behavior to the component that represents it. A throwing `died` can't
+abort the death — it is caught and surfaced as a `system-error` event (`phase: 'died'`) while the entity is still
+removed. Unlike `free`, `died` fires **only** on a real death, never on `world.load()`/`clear()` teardown.
+
+For a non-declarative hook, the world also emits `world.on('entity-died', entity)` at the same point (distinct
+from `entity-removed`, which fires for every removal, reloads included).
 
 ### Reusing a world: `load` and `clear`
 

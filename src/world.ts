@@ -255,7 +255,30 @@ export default class BaseWorld<
 		this.emit('entity-removed', entity);
 		entity.deleteAllComponentMemory();
 	}
+	// Fires the death hooks then removes the entity
 	onEntityDied(entity: BaseEntity<C, Cfg>) {
+		if(this.entities.get(entity.eid) !== entity) {
+			return;
+		}
+
+		const registry = this.registry as RegisteredComponentRegistry<C>;
+		const components = entity.components as Partial<C>;
+		for(let name of Object.keys(components) as Array<keyof C>) {
+			const definition = registry[name];
+			const component = components[name];
+			if(definition?.died && component) {
+				// A bad hook must not abort the death; mirror the update-loop convention and surface a system-error.
+				try {
+					definition.died(component, entity, this as unknown as BaseWorld);
+				} catch(e) {
+					const error = e as Error;
+					console.error(`Error in died hook for component ${String(name)} (entity ${entity.eid}): ${error.message}`, error);
+					this.emit('system-error', { system: String(name), error, entityId: entity.eid, phase: 'died' });
+				}
+			}
+		}
+
+		this.emit('entity-died', entity);
 		this.removeEntity(entity);
 	}
 	getEntityByEid(eid: number): BaseEntity<C, Cfg> | undefined {
