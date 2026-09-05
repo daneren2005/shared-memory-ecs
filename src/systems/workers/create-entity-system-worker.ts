@@ -10,6 +10,7 @@ import type {
 	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerComponentChange, WorkerCreatedEntity,
 } from '../entity-worker-system';
 import { buildWorkerComponent, buildWorkerEntity, type FactoryConfigs } from '../../actions/build-worker-entity';
+import type { WorkerEntityClassRegistry } from '../../entity-class';
 import { applyQueryDelta } from './apply-query-delta';
 
 // The slice of the worker global scope createEntitySystemWorker touches. Passing `self` explicitly (rather than
@@ -37,6 +38,7 @@ export default function createEntitySystemWorker<
 	let pools: { [name: string]: MemoryComponent } = {};
 	let eidCounter: AllocatedMemory | undefined;
 	let factoryConfigs: FactoryConfigs | undefined;
+	let factoryClasses: WorkerEntityClassRegistry | undefined;
 	let addsComponents = false;
 	const getString = (pointer: number): string => stringCache?.getString(pointer) ?? '';
 
@@ -63,6 +65,7 @@ export default function createEntitySystemWorker<
 				eidCounter = heap.getSharedAlloc(message.sharedMemory.eidCounter);
 			}
 			factoryConfigs = message.factoryConfigs;
+			factoryClasses = message.factoryClasses;
 			addsComponents = !!message.addsComponents;
 			worldExtension = updateFunction.init?.(message.data) ?? undefined;
 			postMessageTyped(scope, {
@@ -96,7 +99,7 @@ export default function createEntitySystemWorker<
 			// Only a system registered with createsEntities (factoryConfigs shipped) whose worker entry passed the
 			// component definitions can create entities from a config.
 			if(factoryConfigs && definitions) {
-				message.world.buildEntityDescriptor = config => buildWorkerEntity(config, factoryConfigs!, definitions, allocator);
+				message.world.buildEntityDescriptor = config => buildWorkerEntity(config, factoryConfigs!, definitions, allocator, factoryClasses);
 			}
 			if(addsComponents && definitions) {
 				message.world.buildComponentDescriptor = (name, config) => buildWorkerComponent(name, config, definitions, allocator);

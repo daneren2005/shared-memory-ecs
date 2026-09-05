@@ -2,10 +2,22 @@ export { default as BaseWorld } from './world';
 export type { WorldOptions, WorldConfig } from './world';
 export { default as BaseEntity } from './entity';
 export { default as EntityFactory } from './entity-factory';
-export { entityDefinition, DEAD_INDEX, STATIC_INDEX, TYPE_INDEX } from './entity-component';
+export { defineEntityClasses, defineEntityConfigs } from './entity-class';
+export type {
+	DefinedEntityClasses,
+	EntityClassConstructor,
+	EntityClassDefinition,
+	EntityClassRegistry,
+	EntityClassTemplateConfig,
+	EntityInstanceConfigOf,
+	EntityInstancesOf,
+	EntityTemplateConfigOf,
+} from './entity-class';
+export { entityDefinition, CLASS_INDEX, DEAD_INDEX, STATIC_INDEX, TYPE_INDEX } from './entity-component';
 export { default as ConstantStringCache } from './constant-string-cache';
 export type {
 	EntityComponent,
+	EntityClassConfig,
 	EntityComponentConfig,
 	EntityComponentSerialization,
 } from './entity-component';

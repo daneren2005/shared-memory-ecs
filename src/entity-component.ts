@@ -4,7 +4,8 @@ import type ConstantStringCache from './constant-string-cache';
 
 export interface EntityComponent {
 	index: number
-	type: string
+	readonly type: string
+	readonly class: string
 	dead: boolean
 	isStatic: boolean
 }
@@ -12,6 +13,10 @@ export interface EntityComponent {
 export interface EntityComponentConfig {
 	type: string
 	isStatic?: boolean
+}
+
+export interface EntityClassConfig {
+	readonly class: string
 }
 
 export interface EntityComponentSerialization {
@@ -22,9 +27,9 @@ export interface EntityComponentSerialization {
 export const DEAD_INDEX = 0;
 export const STATIC_INDEX = 1;
 export const TYPE_INDEX = 2;
+export const CLASS_INDEX = 3;
 
-// `type` is stored as a pointer to an interned ConstantString, so the accessor needs the world's string cache
-// (passed in, not captured per instance) to resolve it.
+// Identity strings are interned, so the accessor needs the world's cache to resolve their pointers.
 class EntityComponentImpl extends Component<Uint32Array> implements EntityComponent {
 	private cache: ConstantStringCache;
 
@@ -36,8 +41,8 @@ class EntityComponentImpl extends Component<Uint32Array> implements EntityCompon
 	get type() {
 		return this.cache.getString(this.block[TYPE_INDEX]) ?? '';
 	}
-	set type(value: string) {
-		this.block[TYPE_INDEX] = value ? this.cache.getOrCreate(value).pointer : 0;
+	get class() {
+		return this.cache.getString(this.block[CLASS_INDEX]) ?? '';
 	}
 	get dead() {
 		return this.block[DEAD_INDEX] === 1;
@@ -53,16 +58,17 @@ class EntityComponentImpl extends Component<Uint32Array> implements EntityCompon
 	}
 }
 
-export const entityDefinition: ComponentDefinition<EntityComponent, Uint32Array, EntityComponentConfig, EntityComponentSerialization> = {
+export const entityDefinition: ComponentDefinition<EntityComponent, Uint32Array, EntityComponentConfig & Partial<EntityClassConfig>, EntityComponentSerialization> = {
 	type: Uint32Array,
-	size: 3,
+	size: 4,
 	loadProperties: ['type', 'isStatic'],
-	// The only component that reads the entity (never worker-created): it interns its type string through the heap and
+	// The only component that reads the entity (never worker-created): it interns its identity strings through the heap and
 	// stores the pointer. `entity` is always passed here since loadComponent runs on the main thread.
 	toBlock(config, entity) {
 		const cache = entity!.world.constantStrings;
 		const typePointer = config.type ? cache.getOrCreate(config.type).pointer : 0;
-		return [config.dead ? 1 : 0, config.isStatic ? 1 : 0, typePointer];
+		const classPointer = config.class ? cache.getOrCreate(config.class).pointer : 0;
+		return [config.dead ? 1 : 0, config.isStatic ? 1 : 0, typePointer, classPointer];
 	},
 	attach(entity, memory, index) {
 		return new EntityComponentImpl(memory.getBlock(index), index, entity.world.constantStrings);

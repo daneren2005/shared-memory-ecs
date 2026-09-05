@@ -64,7 +64,13 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 			message.world.allocate = this.allocator;
 			if(this.createsEntities) {
 				const registry: WorkerCreateRegistry = this.world.registry;
-				message.world.buildEntityDescriptor = config => buildWorkerEntity(config, this.world.factory.configs, registry, this.allocator);
+				message.world.buildEntityDescriptor = config => buildWorkerEntity(
+					config,
+					this.world.factory.configs,
+					registry,
+					this.allocator,
+					this.world.factory.getWorkerClasses(),
+				);
 			}
 			if(this.addsComponents) {
 				const registry: WorkerCreateRegistry = this.world.registry;

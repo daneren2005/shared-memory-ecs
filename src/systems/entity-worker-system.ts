@@ -195,6 +195,7 @@ export default abstract class EntityWorkerSystem<
 			sharedMemory: this.isWorkerThread ? this.world.getSharedComponentMemory() : undefined,
 			// Factory templates only go to workers that create entities.
 			factoryConfigs: this.isWorkerThread && this.options.createsEntities ? this.world.factory.configs : undefined,
+			factoryClasses: this.isWorkerThread && this.options.createsEntities ? this.world.factory.getWorkerClasses() : undefined,
 			addsComponents: !!this.options.addsComponents,
 		};
 		this.worker.postMessage(message);
@@ -471,12 +472,13 @@ export interface EntityWorkerSystemWorld {
 // over that type's factory template. The worker merges template + overrides, then allocates + writes each triggered
 // component's block off-thread via the component's toBlock(config). The "entity" component is built on the main
 // thread when the descriptor is adopted, since interning the type is main-thread-only.
-export type WorkerCreateEntityConfig = { type: string } & { [key: string]: unknown };
+export type WorkerCreateEntityConfig = { type: string, class?: never } & { [key: string]: unknown };
 // The result reported back on run-complete: the minted id plus, per game component, the pool index the worker
 // allocated. world.adoptEntity turns this into a real BaseEntity.
 export interface WorkerCreatedEntity {
 	eid: number
 	type: string
+	class?: string
 	isStatic?: boolean
 	components: { [name: string]: number }
 }
@@ -520,8 +522,8 @@ export interface EntityWorkerSystemConfig<
 	getWorker: () => Worker
 	forceMainThread?: boolean
 	getInitData?: () => D
-	// Opt in to worker-side entity creation (createEntityWorker). When set, the factory configs are shipped to this
-	// system's worker on load so it can merge templates; the worker entry must also pass the component registry to
+	// Opt in to worker-side entity creation (createEntityWorker). When set, factory templates and serializable class
+	// allowlists are shipped to this system's worker; the worker entry must also pass the component registry to
 	// createEntitySystemWorker so it has each component's toBlock(). Only systems that create entities need either.
 	createsEntities?: boolean
 	// Opt in to worker-side component allocation through addComponentWorker. The worker entry must also pass the

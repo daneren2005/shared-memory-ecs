@@ -7,7 +7,7 @@ import type { SharedPoolMemory } from '@daneren2005/shared-memory-objects/shared
 import { MAX_BYTE_OFFSET_LENGTH } from '@daneren2005/shared-memory-objects/utils/pointer';
 import MemoryComponent from './memory-component';
 import ConstantStringCache from './constant-string-cache';
-import BaseEntity from './entity';
+import type BaseEntity from './entity';
 import type System from './systems/system';
 import EntitySystem from './systems/entity-system';
 import EntityWorkerSystem from './systems/entity-worker-system';
@@ -35,9 +35,13 @@ interface ComponentFreeBuffer<C extends ComponentMap> {
 	waitElapsed: number
 }
 
-export interface WorldOptions<C extends ComponentMap = ComponentMap, Cfg = any> {
+export interface WorldOptions<
+	C extends ComponentMap = ComponentMap,
+	Cfg = any,
+	E extends BaseEntity<C, Cfg> = BaseEntity<C, Cfg>,
+> {
 	heapSize?: number
-	factory?: EntityFactory<C, Cfg>
+	factory?: EntityFactory<C, Cfg, E>
 }
 
 export interface WorldConfig<Cfg = any> {
@@ -57,6 +61,7 @@ export default class BaseWorld<
 	R extends ComponentDefinitionMap = ComponentDefinitionMap,
 	C extends ComponentMap = ComponentsOf<R>,
 	Cfg = EntityConfigOf<R>,
+	E extends BaseEntity<C, Cfg> = BaseEntity<C, Cfg>,
 > extends EventEmitter {
 	heap: MemoryHeap;
 	// Interns entity type names (and any other constant strings) in the heap
@@ -65,11 +70,11 @@ export default class BaseWorld<
 	// the main thread or inside a worker.
 	private eidCounter: AllocatedMemory;
 	registry: RegisteredComponentRegistry<C> & { entity: RegisteredComponentDefinition<EntityComponent> };
-	factory: EntityFactory<C, Cfg>;
+	factory: EntityFactory<C, Cfg, E>;
 
 	// Keyed by eid: entities leave from the middle one at a time (every death), so a Map deletes in constant
 	// time while still iterating in insertion order, preserving load/save order.
-	entities: Map<number, BaseEntity<C, Cfg>> = new Map();
+	entities: Map<number, E> = new Map();
 	systems: Array<System<C>> = [];
 
 	gameTime = 0;
@@ -87,7 +92,7 @@ export default class BaseWorld<
 	private nextFreeBuffer: ComponentFreeBuffer<C> = { frees: [], waitingSystems: new Set(), waitElapsed: 0 };
 
 	// The entity component is added automatically, so it must not be part of the passed registry.
-	constructor(registry: R, options: WorldOptions<C, Cfg> = {}) {
+	constructor(registry: R, options: WorldOptions<C, Cfg, E> = {}) {
 		super();
 
 		this.heap = new MemoryHeap({ bufferSize: options.heapSize ?? DEFAULT_HEAP_SIZE });
@@ -107,8 +112,8 @@ export default class BaseWorld<
 		}
 		this.registry = registry_ as RegisteredComponentRegistry<C> & { entity: RegisteredComponentDefinition<EntityComponent> };
 
-		this.factory = options.factory ?? new EntityFactory<C, Cfg>();
-		this.factory.world = this;
+		this.factory = options.factory ?? new EntityFactory<C, Cfg, E>();
+		this.factory.setWorld(this);
 	}
 
 	// Returns a fresh, unique entity id. Backed by a heap atomic so a worker allocating an entity gets an id that can
@@ -154,7 +159,7 @@ export default class BaseWorld<
 		return Promise.all(this.systems.map(system => system.finishLoading()).filter(promise => promise instanceof Promise));
 	}
 
-	addEntity(entity: BaseEntity<C, Cfg>, created = true): BaseEntity<C, Cfg> {
+	addEntity(entity: E, created = true): E {
 		this.entities.set(entity.eid, entity);
 		entity.world = this;
 		// Any entity in the world means there is state to tear down on the next load/clear.
@@ -177,20 +182,41 @@ export default class BaseWorld<
 
 		return entity;
 	}
-	loadEntity(config: Cfg, created = true): BaseEntity<C, Cfg> {
+	loadEntity(config: Cfg, created = true): E {
 		return this.factory.loadEntity(config, created);
 	}
 	// Materializes an entity a worker created off-thread (see createEntityWorker): the worker already minted the id and
 	// allocated + wrote every game-component block, so this only builds the `entity` component on the main thread
 	// (interning its type) and adopts each worker-allocated block by index, then wires it into the world like any new
-	// entity. Adopted entities are always the base BaseEntity - the factory's per-type subclass/template is not applied.
-	adoptEntity(descriptor: WorkerCreatedEntity): BaseEntity<C, Cfg> {
-		const entity = new BaseEntity<C, Cfg>(this, undefined, descriptor.eid);
-		entity.loadComponent('entity', { type: descriptor.type, isStatic: descriptor.isStatic }, false);
-		for(let name of Object.keys(descriptor.components)) {
-			entity.attachComponent(name, descriptor.components[name]);
+	// entity. The factory selects the same class wrapper a main-thread load would use.
+	adoptEntity(descriptor: WorkerCreatedEntity): E {
+		let entity: E | undefined;
+		const attached = new Set<string>();
+		try {
+			for(const name of Object.keys(descriptor.components)) {
+				if(!(name in this.registry)) {
+					throw new Error(`Worker-created entity contains unknown component ${name}`);
+				}
+				if(!this.factory.isComponentAllowed(descriptor.class, name)) {
+					throw new Error(`Component ${name} is not allowed for entity class ${descriptor.class ?? ''}`);
+				}
+			}
+			entity = this.factory.createAdoptedEntity(descriptor.type, descriptor.class, descriptor.eid);
+			entity.loadComponent('entity', { type: descriptor.type, class: descriptor.class, isStatic: descriptor.isStatic }, false);
+			for(let name of Object.keys(descriptor.components)) {
+				entity.attachComponent(name, descriptor.components[name]);
+				attached.add(name);
+			}
+			return this.addEntity(entity, true);
+		} catch(error) {
+			entity?.deleteAllComponentMemory();
+			for(const name of Object.keys(descriptor.components)) {
+				if(!attached.has(name) && name in this.registry) {
+					this.deferComponentMemoryFree(this.registry[name as keyof C].memoryComponent, descriptor.components[name]);
+				}
+			}
+			throw error;
 		}
-		return this.addEntity(entity, true);
 	}
 	// Replaces the world's contents. Entities load with created = false so no finishLoading runs mid-batch;
 	// finishLoading is called on each once the whole batch exists, so cross-entity dependencies can resolve.
@@ -209,6 +235,9 @@ export default class BaseWorld<
 		// currently-loaded entity uses. Deduped, so the types actually loaded below cost nothing extra.
 		for(let type of Object.keys(this.factory.configs)) {
 			this.constantStrings.getOrCreate(type);
+		}
+		for(let entityClass of Object.keys(this.factory.classes)) {
+			this.constantStrings.getOrCreate(entityClass);
 		}
 
 		const entities = config.entities.map(entityConfig => this.loadEntity(entityConfig, false));
@@ -247,7 +276,7 @@ export default class BaseWorld<
 
 		this.pristine = true;
 	}
-	removeEntity(entity: BaseEntity<C, Cfg>) {
+	removeEntity(entity: E) {
 		// Match the instance as well as the eid: a stale entity must not remove a newer entity that owns the same key.
 		if(this.entities.get(entity.eid) !== entity) {
 			return;
@@ -258,7 +287,7 @@ export default class BaseWorld<
 		entity.deleteAllComponentMemory();
 	}
 	// Fires the death hooks then removes the entity
-	onEntityDied(entity: BaseEntity<C, Cfg>) {
+	onEntityDied(entity: E) {
 		if(this.entities.get(entity.eid) !== entity) {
 			return;
 		}
@@ -283,7 +312,7 @@ export default class BaseWorld<
 		this.emit('entity-died', entity);
 		this.removeEntity(entity);
 	}
-	getEntityByEid(eid: number): BaseEntity<C, Cfg> | undefined {
+	getEntityByEid(eid: number): E | undefined {
 		return this.entities.get(eid);
 	}
 

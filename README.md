@@ -2,8 +2,8 @@
 
 A small, reusable Entity / Component / System core backed by shared memory
 ([`@daneren2005/shared-memory-objects`](https://www.npmjs.com/package/@daneren2005/shared-memory-objects)).
-It contains only the engine-agnostic parts of the ECS - no game specific concepts (factions, terrain,
-fog of war, sub-classed entities, required components, etc).
+It contains only engine-agnostic ECS concepts. Games supply their own components, entity classes, templates,
+systems, and domain data.
 
 ## Concepts
 
@@ -23,14 +23,16 @@ fog of war, sub-classed entities, required components, etc).
 - **`ComponentRegistry<C>`** – the map of all component definitions for a game.
 - **`EntityFactory<C>`** – maps an entity `type` name to a base (template) config. Loading an entity layers
   the caller's config over its type's template, so shared static data lives in one place and a save only
-  needs the `type` plus the entity's serialization. `BaseWorld#loadEntity` always goes through the factory.
+  needs the `type` plus the entity's serialization. Optionally, a template's immutable `class` selects a
+  game-provided `BaseEntity` subclass and restricts which components that template may load.
 - **`BaseWorld<C>`** – builds one `MemoryComponent` per registered component (attached to that component's
   definition as `world.registry[name].memoryComponent`) and runs systems. It is generic over your component
   map `C`, so `world.registry`, `entity.components`, `setComponent`, etc. are fully typed. Its entities live
   in `world.entities`, a `Map` keyed by `eid` — see [Iterating entities](#iterating-entities).
-- **`BaseEntity<C>`** – an `eid`, an optional `id`, and a bag of memory-backed components. It has no
-  direct property accessors and only loads/saves component data. Every entity has an `entity` component
-  whose `type` (a plain, worker-invisible string) records the factory template it was built from.
+- **`BaseEntity<C>`** – an `eid`, its `id` alias, immutable `type`, `dead` state, and a bag of memory-backed
+  components. Every entity has an `entity` component whose immutable `type` and optional immutable `class`
+  are interned strings stored in shared memory. A game can subclass `BaseEntity` to expose direct convenience
+  getters for one entity class.
 - **Systems** – `System`, `IterableSystem`, `EntitySystem` (main-thread iteration over entities with a
   given set of components), `EntityWorkerSystem` (runs an update function over raw memory blocks,
   off-thread when Web Workers + `SharedArrayBuffer` are available), and `WorkerSystem` (an `EntityWorkerSystem`
@@ -131,6 +133,64 @@ interned once as an immutable `ConstantString` in the heap — 15 `"Space Ship"`
 and the `entity` block stores only a pointer to it at `TYPE_INDEX`. Reading `entity.components.entity.type`
 resolves that pointer back to the string through the world's cache; a worker can do the same (see
 [Reading an entity's type in a worker](#reading-an-entitys-type-in-a-worker)).
+
+### Entity classes and scoped templates
+
+An entity `type` names one concrete template. Its optional `class` names the stable family that chooses a
+wrapper constructor and the components that family permits. Callers still pass only `{ type, ...overrides }`:
+the factory resolves class from the template, and neither identity can change after construction.
+
+```ts
+import {
+	BaseEntity,
+	BaseWorld,
+	EntityFactory,
+	defineEntityClasses,
+	defineEntityConfigs,
+} from '@daneren2005/shared-memory-ecs';
+import type { ComponentsOf, EntityConfigOf, EntityInstancesOf } from '@daneren2005/shared-memory-ecs';
+
+const registry = {
+	health: healthDefinition,
+	value: valueDefinition,
+};
+type Components = ComponentsOf<typeof registry>;
+type Config = EntityConfigOf<typeof registry>;
+
+class ActorEntity extends BaseEntity<Components, Config> {
+	get health() { return this.components.health?.health; }
+}
+class ItemEntity extends BaseEntity<Components, Config> {
+	get value() { return this.components.value?.value; }
+}
+
+const classes = defineEntityClasses(registry, {
+	actor: { entity: ActorEntity, components: ['health'] },
+	item: { entity: ItemEntity, components: ['value'] },
+} as const);
+
+const templates = defineEntityConfigs(classes, {
+	guardian: { type: 'guardian', class: 'actor', maxHealth: 100 },
+	token: { type: 'token', class: 'item', value: 5 },
+} as const);
+
+type Entities = EntityInstancesOf<typeof classes>;
+const factory = new EntityFactory<Components, Config, Entities>(templates, classes);
+const world = new BaseWorld<typeof registry, Components, Config, Entities>(registry, { factory });
+
+const item = world.loadEntity({ type: 'token' });
+console.log(item instanceof ItemEntity);            // true
+console.log(item.components.entity.class);          // "item"
+console.log(item.id, item.type, item.dead);          // BaseEntity identity accessors
+```
+
+`defineEntityConfigs` checks each template against its class's component definitions, so adding a health-only
+property to the item template is a type error. The factory repeats the boundary at runtime: loading or attaching
+a component outside the class allowlist throws, protecting dynamically loaded data too. Client/editor metadata
+that no component consumes should remain in a separate authoring type and be transformed into the scoped ECS
+template.
+
+Classless factories keep the original behavior: they create `BaseEntity` and scan the complete registry.
 
 ## Iterating entities
 
@@ -449,10 +509,12 @@ createEntityWorker(world, { type: 'ship', x: 100, y: 150 }, callbacks);
 
 `createEntityWorker` layers your overrides over the `ship` template, mints a unique id from a shared atomic
 counter (so it never collides with one the main thread or another worker hands out), and for each component
-the merged config triggers, pushes a block into its pool and writes the values - all off-thread. It reports
+the merged config triggers, pushes a block into its pool and writes the values - all off-thread. With entity
+classes registered, the worker also resolves the template's class and considers only its allowed components. It reports
 back an id-plus-block-indexes descriptor; when the run completes the main thread *adopts* it, building the
-always-present `entity` component there (interning the `type` is a main-thread job) and wrapping each block the
-worker wrote - no block is copied or re-allocated. Like every other worker report-back, the new entity first
+always-present `entity` component there (interning `type` and `class` is a main-thread job), asking the factory
+for the registered wrapper, and attaching each block the worker wrote - no block is copied or re-allocated. Like
+every other worker report-back, the new entity first
 exists on the following frame, so the system picks it up next run.
 
 Two things make this work, both opt-in so only the workers that create entities pay for them:
@@ -484,9 +546,9 @@ const shipHealth: ComponentDefinition<HealthComponent, Int32Array, HealthConfig>
 };
 ```
 
-This runs identically on the main-thread fallback. Two current limits: a `loadInFinishLoading` component (one
-that reads other entities) is skipped, since the worker has no world to read; and an adopted entity is always
-the base `BaseEntity` - a factory per-type subclass is not applied to it.
+This runs identically on the main-thread fallback. A `loadInFinishLoading` component (one that reads other
+entities) is skipped, since the worker has no world to read. A worker does not receive constructors; it returns
+the serializable class key, and the main-thread factory constructs the wrapper during adoption.
 
 ### Adding and removing components at runtime
 

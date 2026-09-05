@@ -28,11 +28,12 @@ Run type-check and lint after every edit (AGENTS.md).
 | --- | --- |
 | `index.ts` | Public barrel (main-thread entry). |
 | `worker.ts` | `/worker` subpath barrel — only what runs in a worker, keeps worker bundles tiny. |
-| `world.ts` | `BaseWorld<R,C,Cfg>`: owns the heap, the `constantStrings` cache, the heap-backed atomic eid counter (`allocateEid`, unique across threads), the registry (one `MemoryComponent` per component), `entities` (Map by eid), systems, the update loop, clocks (`gameTime`/`playerTime`/`timeScale`/`paused`), add/remove-entity → system wiring, `onEntityDied` (fires the component `died` hooks + `entity-died` event, then `removeEntity` — see Entity death), the deferred component-free buffers (`deferComponentMemoryFree`/`notifySystemRunCompleted`), and reuse via `load` / async `clear` gated by the `pristine` flag. `getSharedComponentMemory()` ships each pool + the eid counter to workers; `adoptEntity()` materializes an entity a worker created off-thread. Re-emits the heap's buffer-growth as a `grow-buffer` event, and `addGrownBuffer()` adopts a buffer a worker grew (then fans it out) so worker heaps stay in sync both ways. |
-| `entity.ts` | `BaseEntity<C,Cfg>`: eid (from `world.allocateEid()`, a heap atomic — unique across threads; or a pre-minted `adoptEid` for worker-created entities) + component bag; `load`/`save`/`finishLoading`, `loadComponent` (create block from `toBlock` then `attach`), `attachComponent` (adopt a worker-written block by index, optionally emitting `component-added`), `removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. Both `loadComponent`/`attachComponent` ensure `component.block` holds the typed-array view (`??= memory.getBlock(index)` — a `Component` subclass already set it, a plain-object accessor gets it filled in), so query-delta building reuses this instead of re-fetching (a `getBlock` gives a fresh subarray each call) per system the entity joins. `removeComponent`/`deleteAllComponentMemory` call the definition's optional `free(component)` (release extra heap the component owns) then defer the block free to the world rather than freeing inline; whole-entity deletion is guarded so repeated removal cannot queue the same blocks twice. EventEmitter. |
-| `entity-component.ts` | The always-present `entity` component (`type`, `dead`, `isStatic`), all worker-visible in memory. `type` is stored as a pointer to an interned `ConstantString` (see `constant-string-cache.ts`); the `type` accessor resolves it through `world.constantStrings`. Exports `DEAD_INDEX`, `STATIC_INDEX`, `TYPE_INDEX`, `entityDefinition`. |
+| `world.ts` | `BaseWorld<R,C,Cfg,E>`: owns the heap, constant strings, registry pools, atomic eid counter, typed entity Map, systems, clocks, lifecycle, and deferred frees. `E` defaults to `BaseEntity<C,Cfg>` and can be a registered wrapper union. `adoptEntity()` validates a worker descriptor, asks the factory for its class wrapper, attaches its blocks, and queues cleanup on failure. Buffer-growth events keep worker heaps synchronized. |
+| `entity.ts` | `BaseEntity<C,Cfg>`: immutable eid plus `id`/`type`/`dead` accessors and a component bag; load/save/deferred load, component attach/remove/mutation, and teardown. A factory class wrapper supplies a shared allowed-component set; normal load, deferred load, direct attachment, and worker adoption enforce it. Attached components cache their block views, and teardown defers block/free-hook work safely. |
+| `entity-component.ts` | The always-present four-slot `entity` component (`dead`, `isStatic`, immutable `type`, immutable `class`), all worker-visible. Type and class are pointers to interned `ConstantString`s. Exports `DEAD_INDEX`, `STATIC_INDEX`, `TYPE_INDEX`, `CLASS_INDEX`, and `entityDefinition`. Save persists type; class is recovered from that type's template. |
 | `constant-string-cache.ts` | `ConstantStringCache`: interns immutable strings (from `@daneren2005/shared-memory-objects`'s `ConstantString`) in the heap and resolves a stored pointer back to its string. `getOrCreate(value)` dedupes so identical values share one allocation; `getString(pointer)` is a Map hit before rebuilding from memory. The main thread creates+interns (`world.constantStrings`); each worker reconstructs its own cache over the same buffers to resolve pointers. |
-| `entity-factory.ts` | `EntityFactory<C,Cfg>`: maps entity `type` → base config template; layers caller config over it. `loadEntity` builds + adds to world. Override `createEntity` for subclass-per-type. |
+| `entity-class.ts` | Entity-class constructor/definition types plus `defineEntityClasses`/`defineEntityConfigs` inference helpers. A class maps to one wrapper constructor and an allowed component-key tuple; scoped template config types derive from those definitions. Worker metadata contains component names only, never constructors. |
+| `entity-factory.ts` | `EntityFactory<C,Cfg,E>`: maps immutable type → template, merges instance data, resolves immutable class from the template, validates component triggers, and constructs the registered wrapper with its allowlist. It also creates pre-minted shells for worker adoption and serializes class metadata for entity-creating workers. Classless factories retain the original path. |
 | `component-definition.ts` | All the component/registry types: `ComponentDefinition` — a component is built in two required halves, `toBlock(config, entity?)` (worker-safe config→block-values map) + `attach(entity, memory, index)` (accessor over that block); loading is `attach(entity, memory, memory.create(toBlock(config)))`, and a worker calls only `toBlock`. Plus the optional `free(component)` teardown hook, `save(component)`, and `died(component, entity, world)` (fires once on the main thread when the entity dies, before its blocks are freed — see Entity death). `BaseComponent`, `ComponentMap`, `ComponentRegistry`, `RegisteredComponentDefinition`, and the derivations `ComponentsOf` (from `attach`'s return, intersected with `BaseComponent`) / `EntityConfigOf` that infer `C`/`Cfg` from a registry. |
 | `component.ts` | `Component<T>` base class an `attach` returns (`new YourComponent(block, index)`): holds `block`/`index` fields, subclass adds prototype get/set over `this.block`. One shared hidden class per component type keeps reads monomorphic/inlinable and construction a single allocation (vs a closure per accessor). `attach` may still return a plain object; the entity layer fills in `block` either way. |
 | `memory-component.ts` | `MemoryComponent`: a pool of same-sized blocks in the heap (`create`/`getBlock`/`get`/`set`/`delete`/`clear`). Backed by a `SharedPool` (all bookkeeping in the heap), so a worker can reconstruct a handle over the same pool (`MemoryComponent.fromSharedMemory` / owner's `getSharedMemory()`) and allocate/read blocks off-thread — lockless except a spin-lock guarding rare chunk growth. Backing type is `ComponentTypedArray`. |
@@ -64,12 +65,13 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
 | `actions/kill-entity.ts` / `kill-entity-worker.ts` | Mark an entity dead (main / worker side). |
 | `actions/create-entity-worker.ts` | `createEntityWorker(world, config, callbacks)`: create an entity from a factory config off-thread (via `world.buildEntityDescriptor`), report the descriptor for the main thread to adopt. |
 | `actions/add-component-worker.ts` / `remove-component-worker.ts` | Worker helpers that queue structural changes for the main thread to apply after the run. Addition allocates/writes a block through `world.buildComponentDescriptor`; removal is a descriptor-only callback. |
-| `actions/build-worker-entity.ts` | `buildWorkerEntity(config, factoryConfigs, registry, allocator)`: shared config→descriptor builder (template merge + per-component `toBlock` allocation); used by the real worker and the main-thread fallback. |
+| `actions/build-worker-entity.ts` | `buildWorkerEntity(config, factoryConfigs, registry, allocator, classes?)`: shared config→descriptor builder. It merges the type template, resolves its optional class, limits allocation to that class's components, and runs each triggered `toBlock`; used by both worker backends. |
 
 ## Core data flow
 
-- **Load:** `world.loadEntity(config)` → factory expands `type` → `new BaseEntity` →
-  `load` loads every component whose `loadProperties` appear in the flat config (deferred
+- **Load:** `world.loadEntity(config)` → factory expands immutable `type` → resolves immutable `class` from
+  the template → constructs its registered `BaseEntity` subclass → `load` loads each allowed component whose
+  `loadProperties` appear in the flat config (deferred
   ones wait for `finishLoading`, run once the whole batch exists) → `addEntity` (Map,
   wires `component-added`/`removed` → systems, emits `entity-added`).
 - **Save:** `entity.save()` merges each component's `save()` (Serialization slice only;
@@ -135,14 +137,14 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
   `init` in its constructor and the worker answers `init-complete`. `system.finishLoading()` then posts `load`
   carrying `getInitData()`'s result; the worker runs `updateFunction.init` and answers `loaded`. `world.init()`
   awaits both in order, and `world.load()` re-runs `finishLoading` so a reused world re-seeds its workers.
-- **Constant strings (entity type):** `entity.type` is interned once per distinct value into the heap as a
-  `ConstantString` (immutable, lockless — see the shared-memory-objects repo) and the entity block stores only its
-  pointer at `TYPE_INDEX`, so N entities of one type share one allocation. A real worker gets the heap's
+- **Constant strings (entity identity):** `entity.type` and `entity.class` are interned once per distinct value
+  into the heap as immutable, lockless `ConstantString`s, and the entity block stores only their pointers at
+  `TYPE_INDEX`/`CLASS_INDEX`. N entities of one type or class share one allocation. A real worker gets the heap's
   `SharedArrayBuffer`s in its `load` message (`heap: this.world.heap.getSharedMemory()`), rebuilds a `MemoryHeap`
   + its own `ConstantStringCache`, and exposes `world.getString(pointer)` (injected before every run) so update
   functions resolve `components.entity[TYPE_INDEX]` back to the string — a pointer→string Map hit before ever
-  touching memory. `world.load()` also pre-interns a constant for every type in `factory.configs` (deduped), so a
-  worker can resolve any known type even when no currently-loaded entity uses it. `world.load()`'s re-`finishLoading`
+  touching memory. `world.load()` also pre-interns every configured type and registered class name (deduped), so a
+  worker can resolve known identity values even when no currently-loaded entity uses them. `world.load()`'s re-`finishLoading`
   re-ships the heap; buffers the heap grows afterward reach the worker as `grow-buffer` messages so later pointers
   still resolve. The main-thread fallback
   (`EntitySystemWebWorker`) shares the world's cache directly and ignores both the shipped heap and `grow-buffer`.
@@ -172,20 +174,22 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
   (`actions/create-entity-worker.ts`) with a factory config `{ type, ...overrides }`. The worker builds the entity
   **off-thread** via `world.buildEntityDescriptor` (injected each run; the shared `buildWorkerEntity` in
   `actions/build-worker-entity.ts`): it layers the type's factory template under the overrides, mints an id
-  (`world.allocate.allocateEid()`), and for each triggered game component pushes a block into the shared pool
+  (`world.allocate.allocateEid()`), resolves the template's optional class, and for each allowed, triggered game
+  component pushes a block into the shared pool
   (`allocateComponentBlock`) filled by the component's `toBlock(config)` — the worker-safe half of the definition
   (no entity/world access). `entity` and `loadInFinishLoading` components are skipped. It reports
-  a `WorkerCreatedEntity` (`{ eid, type, isStatic?, components: { name: index } }`) through `callbacks.createEntity`.
-  On run-complete the main thread calls `world.adoptEntity(descriptor)`: it builds the `entity` component on the main
-  thread (interning the type is main-thread-only), then `entity.attachComponent(name, index)` wraps each
+  a `WorkerCreatedEntity` (`{ eid, type, class?, isStatic?, components: { name: index } }`) through
+  `callbacks.createEntity`. On run-complete the main thread calls `world.adoptEntity(descriptor)`: the factory
+  selects the registered wrapper, then the world builds the `entity` component on the main thread (interning
+  identity strings is main-thread-only), and `entity.attachComponent(name, index)` wraps each
   worker-written block via the definition's config-free `attach(entity, memory, index)` half — no block is
   re-allocated (a component's own extra allocations, if any, live in `attach`, so they happen the same way whether
   loaded or adopted). It then `addEntity`s the entity so it joins systems via
   `entity-added` on the next frame. Two opt-ins gate it: the system's `createsEntities: true` (ships the factory
-  configs to its worker on load) and the worker entry passing the component registry to `createEntitySystemWorker` (so
-  the worker has each `toBlock`). Runs identically on the main-thread fallback (same `buildWorkerEntity`, over
-  `world.registry`/`world.factory.configs`). Adopted entities are always the base `BaseEntity`; the factory's per-type
-  subclass is not applied.
+  configs and serializable class allowlists to its worker on load) and the worker entry passing the component
+  registry to `createEntitySystemWorker` (so the worker has each `toBlock`). Runs identically on the main-thread
+  fallback. The descriptor returns the template-derived class key; `world.adoptEntity` asks the main-thread factory
+  for that wrapper, validates its component indexes against the allowlist, and attaches without reallocation.
 - **Worker update-function hooks:** besides the per-entity body, an `updateFunction` may carry `init`,
   `preRun`, and `entityRemoved`. `init(data)` runs on every `finishLoading` — `data` comes from the
   system's `getInitData()` (typed via the `D` param) — and its returned `Partial<W>` is merged onto `world`

@@ -1,6 +1,6 @@
-import { EntityWorkerSystem, EntityFactory } from '../../index';
+import { BaseEntity, BaseWorld, EntityWorkerSystem, EntityFactory, defineEntityClasses, defineEntityConfigs } from '../../index';
 import type { System } from '../../index';
-import { createTestWorld, type Components, type Config, type TestWorld } from '../../__tests__/fixtures/components';
+import { createTestWorld, registry, type Components, type Config, type TestWorld } from '../../__tests__/fixtures/components';
 import { listOf } from '../../__tests__/fixtures/entity-collections';
 import { createMultiUpdate } from '../../__tests__/fixtures/create-multi-update';
 
@@ -23,6 +23,12 @@ class CreateMultiSystem extends EntityWorkerSystem<Components, { movement: Float
 			forceMainThread: mode === 'main-thread',
 			getWorker: () => new Worker(CREATE_MULTI_WORKER_URL, { type: 'module' }),
 		});
+	}
+}
+
+class MobileEntity extends BaseEntity<Components, Config> {
+	get speed(): number | undefined {
+		return this.components.movement?.speed;
 	}
 }
 
@@ -58,6 +64,37 @@ describe.each(MODES)('worker createEntity (%s)', (mode) => {
 		// The id was minted from the shared counter, so it is a real, unique eid.
 		expect(created.eid).toBeGreaterThan(0);
 		expect(created.eid).not.toEqual(trigger.eid);
+
+		system.destroy();
+	});
+
+	it('resolves the template class and adopts into its registered wrapper', async () => {
+		const classes = defineEntityClasses(registry, {
+			mobile: {
+				entity: MobileEntity,
+				components: ['health', 'movement'],
+			},
+		} as const);
+		const configs = defineEntityConfigs(classes, {
+			ship: { type: 'ship', class: 'mobile', maxHealth: 100 },
+			trigger: { type: 'trigger', class: 'mobile', speed: 1 },
+		});
+		const factory = new EntityFactory<Components, Config, MobileEntity>(configs, classes);
+		const world = new BaseWorld<typeof registry, Components, Config, MobileEntity>(registry, { factory });
+		const system: System<Components> = new CreateMultiSystem(world, mode);
+		world.addSystem(system);
+
+		const trigger = world.loadEntity({ type: 'trigger' });
+		await system.init();
+		await system.finishLoading();
+
+		system.run(16);
+		await flush();
+
+		const created = listOf(world.entities).find(other => other !== trigger)!;
+		expect(created).toBeInstanceOf(MobileEntity);
+		expect(created.components.entity.class).toBe('mobile');
+		expect(created.speed).toBe(9);
 
 		system.destroy();
 	});

@@ -9,17 +9,24 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 
 	world: BaseWorld<ComponentDefinitionMap, C, Cfg>;
 	private componentMemoryDeletionScheduled = false;
+	private allowedComponents?: ReadonlySet<string>;
 	// entity is always present; game components are partial.
 	components: Partial<C> & { entity: EntityComponent } = {} as Partial<C> & { entity: EntityComponent };
 
 	// `adoptEid`: build an empty shell around a pre-minted id (an entity a worker created off-thread), skipping the
 	// automatic entity-component load - the caller (world.adoptEntity) loads the entity component and attaches the
 	// worker-allocated blocks itself.
-	constructor(world: BaseWorld<ComponentDefinitionMap, C, Cfg>, config?: Cfg, adoptEid?: number) {
+	constructor(
+		world: BaseWorld<ComponentDefinitionMap, C, Cfg>,
+		config?: Cfg,
+		adoptEid?: number,
+		allowedComponents?: ReadonlySet<string>,
+	) {
 		super();
 
 		this.world = world;
 		this.eid = adoptEid ?? world.allocateEid();
+		this.allowedComponents = allowedComponents ?? world.factory.getAllowedComponentsForConfig(config);
 		if(adoptEid !== undefined) {
 			return;
 		}
@@ -29,8 +36,18 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 			this.load(config);
 		}
 	}
+	get id(): number {
+		return this.eid;
+	}
+	get dead(): boolean {
+		return this.components.entity.dead;
+	}
+	get type(): string {
+		return this.components.entity.type;
+	}
 
 	loadComponent<K extends keyof C>(name: K, config: any, emitAdded = true): C[K] {
+		this.assertComponentAllowed(name);
 		const definition = (this.world.registry as RegisteredComponentRegistry<C>)[name];
 		const memoryComponent = definition.memoryComponent;
 		const index = memoryComponent.create(definition.toBlock(config, this));
@@ -47,6 +64,7 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 	// Builds an accessor over an existing block (allocated + written by a worker) instead of creating a new one - the
 	// adopt half of loadComponent, without the create.
 	attachComponent<K extends keyof C>(name: K, index: number, emitAdded = false): C[K] {
+		this.assertComponentAllowed(name);
 		const definition = (this.world.registry as RegisteredComponentRegistry<C>)[name];
 		const component = definition.attach(this, definition.memoryComponent, index);
 		(component as BaseComponent).block ??= definition.memoryComponent.getBlock(index);
@@ -70,6 +88,7 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 		}
 	}
 	setComponent<K extends keyof C, P extends keyof C[K]>(componentName: K, prop: P, value: C[K][P]) {
+		this.assertComponentPropertyMutable(componentName, prop);
 		const component = this.components[componentName];
 		if(!component) {
 			return;
@@ -82,6 +101,9 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 	 * NOTE: Does not emit component-property-updated!
 	 */
 	setComponentBulk<K extends keyof C>(componentName: K, values: Partial<C[K]>) {
+		for(const prop of Object.keys(values)) {
+			this.assertComponentPropertyMutable(componentName, prop);
+		}
 		const component = this.components[componentName];
 		if(!component) {
 			return;
@@ -90,6 +112,7 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 		Object.assign(component, values);
 	}
 	deleteComponent<K extends keyof C>(componentName: K, prop: keyof C[K]) {
+		this.assertComponentPropertyMutable(componentName, prop);
 		const component = this.components[componentName];
 		if(!component) {
 			return;
@@ -121,6 +144,9 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 		const registry = this.world.registry as RegisteredComponentRegistry<C>;
 		for(let name of Object.keys(registry) as Array<keyof C>) {
 			if(name === 'entity') {
+				continue;
+			}
+			if(!this.isComponentAllowed(name)) {
 				continue;
 			}
 
@@ -164,11 +190,34 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 			if(name === 'entity') {
 				continue;
 			}
+			if(!this.isComponentAllowed(name)) {
+				continue;
+			}
 
 			const definition = registry[name];
 			if(definition.loadInFinishLoading && definition.loadProperties.some(prop => prop in props)) {
 				this.loadComponent(name, config, false);
 			}
+		}
+	}
+
+	private isComponentAllowed(name: keyof C): boolean {
+		return name === 'entity' || !this.allowedComponents || this.allowedComponents.has(String(name));
+	}
+	setAllowedComponents(allowedComponents: ReadonlySet<string> | undefined): void {
+		if(this.allowedComponents && this.allowedComponents !== allowedComponents) {
+			throw new Error('Entity component allowlist is immutable');
+		}
+		this.allowedComponents = allowedComponents;
+	}
+	private assertComponentAllowed(name: keyof C): void {
+		if(!this.isComponentAllowed(name)) {
+			throw new Error(`Component ${String(name)} is not allowed for entity type ${this.type}`);
+		}
+	}
+	private assertComponentPropertyMutable(componentName: keyof C, prop: PropertyKey): void {
+		if(componentName === 'entity' && (prop === 'type' || prop === 'class')) {
+			throw new Error(`Entity ${prop} is immutable`);
 		}
 	}
 }

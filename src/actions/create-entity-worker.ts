@@ -1,9 +1,9 @@
 import type { EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, WorkerCreateEntityConfig } from '../systems/entity-worker-system';
 
-// Worker-side entity creation from a factory config. Pass `{ type: 'ship', ...overrides }`: the worker merges the
-// ship template shipped from the factory, mints a unique id, and allocates + writes every triggered component's block
+// Worker-side entity creation from a factory config. The worker merges the selected type template, resolves its
+// optional class, mints a unique id, and allocates + writes every allowed, triggered component block
 // directly into the shared pools (off-thread) via each component's toBlock(). It reports the descriptor back; the main
-// thread adopts it on run-complete (world.adoptEntity), building the `entity` component there and wrapping the
+// thread adopts it on run-complete (world.adoptEntity), building the `entity` component and class wrapper there
 // worker-written blocks, so the entity first exists on the following frame.
 //
 // Requires the system to be registered with `createsEntities: true` and its worker entry to pass the component
