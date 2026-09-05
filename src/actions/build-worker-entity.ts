@@ -1,4 +1,4 @@
-import type { WorkerAllocator, WorkerCreateEntityConfig, WorkerCreatedEntity } from '../systems/entity-worker-system';
+import type { WorkerAllocator, WorkerCreateEntityConfig, WorkerCreatedComponent, WorkerCreatedEntity } from '../systems/entity-worker-system';
 
 // The slice of a component definition worker-side creation needs. Both the game's ComponentDefinitionMap and the
 // world's RegisteredComponentRegistry satisfy it.
@@ -47,5 +47,28 @@ export function buildWorkerEntity(
 		type: config.type,
 		isStatic: merged.isStatic as boolean | undefined,
 		components,
+	};
+}
+
+export function buildWorkerComponent(
+	name: string,
+	config: Record<string, unknown>,
+	registry: WorkerCreateRegistry,
+	allocator: WorkerAllocator,
+): WorkerCreatedComponent {
+	if(name === 'entity') {
+		throw new Error('The entity component cannot be added at runtime');
+	}
+	const definition = registry[name];
+	if(!definition) {
+		throw new Error(`Unknown component: ${name}`);
+	}
+	if(definition.loadInFinishLoading) {
+		throw new Error(`Component ${name} requires main-thread finishLoading and cannot be added in a worker`);
+	}
+
+	return {
+		name,
+		index: allocator.allocateComponentBlock(name, definition.toBlock(config)),
 	};
 }

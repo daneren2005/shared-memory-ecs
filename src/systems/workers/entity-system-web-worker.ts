@@ -6,9 +6,9 @@ import type BaseWorld from '../../world';
 import type { ComponentDefinitionMap, ComponentMap, RegisteredComponentRegistry } from '../../component-definition';
 import type {
 	EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityQueryComponents, EntityUpdateComponents,
-	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerAllocator, WorkerCreatedEntity,
+	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerAllocator, WorkerComponentChange, WorkerCreatedEntity,
 } from '../entity-worker-system';
-import { buildWorkerEntity, type WorkerCreateRegistry } from '../../actions/build-worker-entity';
+import { buildWorkerComponent, buildWorkerEntity, type WorkerCreateRegistry } from '../../actions/build-worker-entity';
 
 // Main-thread fallback that runs the update function synchronously, mirroring the real worker's behavior.
 export default class EntitySystemWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> extends WebWorker {
@@ -21,12 +21,19 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 	private world: BaseWorld<ComponentDefinitionMap, C>;
 	private allocator: WorkerAllocator;
 	private createsEntities: boolean;
+	private addsComponents: boolean;
 
-	constructor(updateFunction: EntityUpdateFunction<C, T, W, D>, world: BaseWorld<ComponentDefinitionMap, C>, createsEntities = false) {
+	constructor(
+		updateFunction: EntityUpdateFunction<C, T, W, D>,
+		world: BaseWorld<ComponentDefinitionMap, C>,
+		createsEntities = false,
+		addsComponents = false,
+	) {
 		super();
 		this.updateFunction = updateFunction;
 		this.world = world;
 		this.createsEntities = createsEntities;
+		this.addsComponents = addsComponents;
 		const registry = world.registry as RegisteredComponentRegistry<C>;
 		this.allocator = {
 			allocateEid: () => world.allocateEid(),
@@ -59,11 +66,16 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 				const registry: WorkerCreateRegistry = this.world.registry;
 				message.world.buildEntityDescriptor = config => buildWorkerEntity(config, this.world.factory.configs, registry, this.allocator);
 			}
+			if(this.addsComponents) {
+				const registry: WorkerCreateRegistry = this.world.registry;
+				message.world.buildComponentDescriptor = (name, config) => buildWorkerComponent(name, config, registry, this.allocator);
+			}
 			// Timed like the real worker so a forceMainThread system reports a real run cost, not zero.
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
 			let systemEvents: SystemEvents = {};
 			let createdEntities: Array<WorkerCreatedEntity> = [];
+			let componentChanges: Array<WorkerComponentChange> = [];
 			let errors: Array<WorkerRunError> = [];
 
 			this.entities = applyQueryDelta(this.entities, message.entities as QueryDelta<T>);
@@ -102,6 +114,12 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 				},
 				createEntity(entity: WorkerCreatedEntity) {
 					createdEntities.push(entity);
+				},
+				addComponent(entityId, component) {
+					componentChanges.push({ type: 'add', entityId, component });
+				},
+				removeComponent(entityId, componentName) {
+					componentChanges.push({ type: 'remove', entityId, componentName: String(componentName) });
 				},
 			};
 			let preRunFailed = false;
@@ -144,6 +162,7 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 				events: entityEvents,
 				systemEvents,
 				created: createdEntities,
+				componentChanges,
 				errors,
 			});
 		}

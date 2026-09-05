@@ -1,6 +1,6 @@
 import type { MemoryHeapMemory, GrowBufferData } from '@daneren2005/shared-memory-objects/memory-heap';
 import type { WorldSharedMemory } from '../../world';
-import type { EntityWorkerSystemWorld, QueryDelta, WorkerCreatedEntity } from '../entity-worker-system';
+import type { EntityWorkerSystemWorld, QueryDelta, WorkerComponentChange, WorkerCreatedEntity } from '../entity-worker-system';
 
 interface InitMessage {
 	type: 'init'
@@ -20,6 +20,7 @@ interface LoadMessage<D = unknown> {
 	// Factory templates by type, shipped only to systems registered with createsEntities, so the worker can merge a
 	// type's template when creating an entity from a config.
 	factoryConfigs?: { [type: string]: Record<string, unknown> }
+	addsComponents?: boolean
 }
 
 // A buffer the heap grew after load: forwarded so the worker's reconstructed heap keeps resolving new pointers.
@@ -79,6 +80,7 @@ interface EntityEventsMessage {
 	events: Array<EntityEvent>
 	systemEvents: SystemEvents
 	created: Array<WorkerCreatedEntity>
+	componentChanges: Array<WorkerComponentChange>
 	errors: Array<WorkerRunError>
 }
 

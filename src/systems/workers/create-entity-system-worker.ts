@@ -7,9 +7,9 @@ import MemoryComponent from '../../memory-component';
 import type { ComponentDefinitionMap, ComponentMap } from '../../component-definition';
 import type {
 	EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityQueryComponents, EntityUpdateComponents,
-	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerCreatedEntity,
+	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerComponentChange, WorkerCreatedEntity,
 } from '../entity-worker-system';
-import { buildWorkerEntity, type FactoryConfigs } from '../../actions/build-worker-entity';
+import { buildWorkerComponent, buildWorkerEntity, type FactoryConfigs } from '../../actions/build-worker-entity';
 import { applyQueryDelta } from './apply-query-delta';
 
 // The slice of the worker global scope createEntitySystemWorker touches. Passing `self` explicitly (rather than
@@ -37,6 +37,7 @@ export default function createEntitySystemWorker<
 	let pools: { [name: string]: MemoryComponent } = {};
 	let eidCounter: AllocatedMemory | undefined;
 	let factoryConfigs: FactoryConfigs | undefined;
+	let addsComponents = false;
 	const getString = (pointer: number): string => stringCache?.getString(pointer) ?? '';
 
 	scope.onmessage = function(e) {
@@ -62,6 +63,7 @@ export default function createEntitySystemWorker<
 				eidCounter = heap.getSharedAlloc(message.sharedMemory.eidCounter);
 			}
 			factoryConfigs = message.factoryConfigs;
+			addsComponents = !!message.addsComponents;
 			worldExtension = updateFunction.init?.(message.data) ?? undefined;
 			postMessageTyped(scope, {
 				type: 'loaded',
@@ -96,10 +98,14 @@ export default function createEntitySystemWorker<
 			if(factoryConfigs && definitions) {
 				message.world.buildEntityDescriptor = config => buildWorkerEntity(config, factoryConfigs!, definitions, allocator);
 			}
+			if(addsComponents && definitions) {
+				message.world.buildComponentDescriptor = (name, config) => buildWorkerComponent(name, config, definitions, allocator);
+			}
 			const start = performance.now();
 			let entityEvents: Array<EntityEvent> = [];
 			let systemEvents: SystemEvents = {};
 			let createdEntities: Array<WorkerCreatedEntity> = [];
+			let componentChanges: Array<WorkerComponentChange> = [];
 			let errors: Array<WorkerRunError> = [];
 
 			entities = applyQueryDelta(entities, message.entities as QueryDelta<T>);
@@ -138,6 +144,12 @@ export default function createEntitySystemWorker<
 				},
 				createEntity(entity: WorkerCreatedEntity) {
 					createdEntities.push(entity);
+				},
+				addComponent(entityId, component) {
+					componentChanges.push({ type: 'add', entityId, component });
+				},
+				removeComponent(entityId, componentName) {
+					componentChanges.push({ type: 'remove', entityId, componentName: String(componentName) });
 				},
 			};
 			let preRunFailed = false;
@@ -180,6 +192,7 @@ export default function createEntitySystemWorker<
 				events: entityEvents,
 				systemEvents,
 				created: createdEntities,
+				componentChanges,
 				errors,
 			});
 		}

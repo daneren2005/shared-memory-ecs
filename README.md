@@ -307,7 +307,7 @@ class SpawnerSystem extends WorkerSystem<Components, SpawnerWorld> {
 ```
 
 Its worker entry uses `createSystemWorker` (the run-function counterpart of `createEntitySystemWorker`),
-passing the registry only when it creates entities:
+passing the registry only when it creates entities or adds components:
 
 ```ts
 import { createSystemWorker } from '@daneren2005/shared-memory-ecs/worker';
@@ -324,7 +324,8 @@ barrel: importing `createEntitySystemWorker` from `@daneren2005/shared-memory-ec
 `BaseWorld`, every system, their `@daneren2005/shared-memory-objects` dependencies - into the worker, even
 though a worker never runs any of it (easily ~20kb of dead code per worker). Import worker-side helpers from
 the `@daneren2005/shared-memory-ecs/worker` subpath instead. It exposes only what runs in a worker -
-`createEntitySystemWorker`, `createSystemWorker`, `createEntityWorker`, `killEntityWorker`, `DEAD_INDEX`,
+`createEntitySystemWorker`, `createSystemWorker`, `createEntityWorker`, `addComponentWorker`,
+`removeComponentWorker`, `killEntityWorker`, `DEAD_INDEX`,
 `TYPE_INDEX` (plus the worker-relevant types) - so the bundle stays tiny:
 
 ```ts
@@ -340,10 +341,9 @@ or `killEntityWorker` should import them from `/worker` too. Type-only imports (
 `EntityWorkerSystemWorld`, ...) can come from either path since types are erased, and main-thread code
 (`EntityWorkerSystem`, `BaseWorld`, `EntityFactory`, ...) keeps importing from the package root.
 
-A worker that creates entities (see [Creating entities from a worker](#creating-entities-from-a-worker)) passes
-your component registry as the third argument - `createEntitySystemWorker(self, shipUpdate, registry)` - so it has
-each component's `toBlock`. Only do this in workers that actually create entities; it pulls the registry (and
-whatever it imports) into that worker's bundle.
+A worker that creates entities or adds components passes your component registry as the third argument -
+`createEntitySystemWorker(self, shipUpdate, registry)` - so it has each component's `toBlock`. Only do this in
+workers that need it; it pulls the registry (and whatever it imports) into that worker's bundle.
 
 ### Reading an entity's type in a worker
 
@@ -378,7 +378,8 @@ on the main thread) resolves the same way.
 An update function runs on shared memory, so anything it writes is already visible on the main thread. What
 it cannot do from there is touch the world, so the things that have to happen back on it go through
 `callbacks`: `entityComponentChanged` (emitted on the entity as `component-property-updated`), `entityDied`
-(as `death`), and `createEntity` (see [Creating entities from a worker](#creating-entities-from-a-worker)).
+(as `death`), `createEntity` (see [Creating entities from a worker](#creating-entities-from-a-worker)), and
+component changes requested by `addComponentWorker` / `removeComponentWorker`.
 All of them are collected during the run and applied once it completes.
 
 `emitEntityEvent` is the escape hatch for an event of your own: name it whatever you like and give it
@@ -486,6 +487,45 @@ const shipHealth: ComponentDefinition<HealthComponent, Int32Array, HealthConfig>
 This runs identically on the main-thread fallback. Two current limits: a `loadInFinishLoading` component (one
 that reads other entities) is skipped, since the worker has no world to read; and an adopted entity is always
 the base `BaseEntity` - a factory per-type subclass is not applied to it.
+
+### Adding and removing components at runtime
+
+On the main thread, use the entity directly:
+
+```ts
+ship.loadComponent('shield', { capacity: 100 });
+ship.removeComponent('shield');
+```
+
+Both operations notify every system. Required and excluded (`not`) queries change membership as needed. An
+entity already present through other required components is re-sent to worker systems too, so their cached
+component bundle gains or loses an optional component on the next run.
+
+Inside an update function, use the worker helpers instead. They record structural changes without changing the
+component snapshot currently being iterated:
+
+```ts
+import { addComponentWorker, removeComponentWorker } from '@daneren2005/shared-memory-ecs/worker';
+
+if(equippedShieldGenerator && !components.shield) {
+	addComponentWorker(world, entityId, 'shield', { capacity: 100 }, callbacks);
+} else if(!equippedShieldGenerator && components.shield) {
+	removeComponentWorker(entityId, 'shield', callbacks);
+}
+```
+
+The main thread applies those commands after the worker run completes, emits the normal component-added or
+component-removed event, and queues query deltas. The originating run therefore keeps a stable snapshot and all
+systems see the new structure no later than their next run. Removing a component uses the same deferred-free
+safety described below.
+
+Worker-side addition needs two opt-ins because it allocates a block:
+
+- Set `addsComponents: true` on the `EntityWorkerSystem`.
+- Pass the component registry to that system's `createEntitySystemWorker(self, update, registry)` call.
+
+`addComponentWorker` calls the definition's worker-safe `toBlock(config)` and cannot add the always-present
+`entity` component or a `loadInFinishLoading` component. Worker-side removal needs no allocation opt-in.
 
 ### Freeing component memory safely
 

@@ -46,11 +46,14 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 	}
 	// Builds an accessor over an existing block (allocated + written by a worker) instead of creating a new one - the
 	// adopt half of loadComponent, without the create.
-	attachComponent<K extends keyof C>(name: K, index: number): C[K] {
+	attachComponent<K extends keyof C>(name: K, index: number, emitAdded = false): C[K] {
 		const definition = (this.world.registry as RegisteredComponentRegistry<C>)[name];
 		const component = definition.attach(this, definition.memoryComponent, index);
 		(component as BaseComponent).block ??= definition.memoryComponent.getBlock(index);
 		(this.components as Partial<C>)[name] = component;
+		if(emitAdded) {
+			this.emit('component-added', name, component);
+		}
 		return component;
 	}
 	removeComponent<K extends keyof C>(name: K) {

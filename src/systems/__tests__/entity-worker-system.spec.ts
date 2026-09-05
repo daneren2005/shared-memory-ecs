@@ -1,6 +1,6 @@
 import { EntityWorkerSystem, TYPE_INDEX } from '../../index';
 import type { BaseEntity, EntityWorkerSystemQuery, System } from '../../index';
-import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
+import { createTestWorld, type ComponentArrays, type Components, type TestWorld } from '../../__tests__/fixtures/components';
 import { eidsOf, listOf } from '../../__tests__/fixtures/entity-collections';
 import { damageUpdate, DAMAGED_ENTITIES_EVENT, type DamageWorld, type DamageInitData } from '../../__tests__/fixtures/damage-update';
 import { killUpdate, KILLED_ENTITIES_EVENT } from '../../__tests__/fixtures/kill-update';
@@ -8,6 +8,7 @@ import { spawnUpdate } from '../../__tests__/fixtures/spawn-update';
 import { queryTargetUpdate } from '../../__tests__/fixtures/query-target-update';
 import { typeReadUpdate, TYPE_READ_EVENT } from '../../__tests__/fixtures/type-read-update';
 import { errorUpdate, POISON_MAX_HEALTH, type ErrorWorld } from '../../__tests__/fixtures/error-update';
+import { componentChangeUpdate, type ComponentChangeWorld } from '../../__tests__/fixtures/component-change-update';
 import type { SystemError } from '../../index';
 
 // Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.
@@ -18,6 +19,7 @@ const SPAWN_WORKER_URL = new URL('../../__tests__/fixtures/spawn.worker.ts', imp
 const QUERY_TARGET_WORKER_URL = new URL('../../__tests__/fixtures/query-target.worker.ts', import.meta.url);
 const TYPE_READ_WORKER_URL = new URL('../../__tests__/fixtures/type-read.worker.ts', import.meta.url);
 const ERROR_WORKER_URL = new URL('../../__tests__/fixtures/error.worker.ts', import.meta.url);
+const COMPONENT_CHANGE_WORKER_URL = new URL('../../__tests__/fixtures/component-change.worker.ts', import.meta.url);
 
 // Every test runs against both backends: 'main-thread' (EntitySystemWebWorker) and 'worker' (a real worker
 // module). Both must produce identical observable behavior.
@@ -238,6 +240,31 @@ describe.each(MODES)('entity-worker-system (%s)', (mode) => {
 	// The update pipeline, where the backends genuinely differ (the real worker caches blocks by id and gets
 	// only the id on later runs). Both must reach identical results.
 	describe('run', () => {
+		it('applies worker component changes after the run and refreshes existing query entries', async () => {
+			let system = useSystem(new ComponentChangeSystem(world, mode));
+			await initSystem(system);
+
+			let entity = createEntity({ maxHealth: 100 });
+			system.componentAction = 'add';
+			system.run(16);
+			await flush();
+
+			expect(entity.components.movement?.speed).toEqual(42);
+			expect(system.getQueryEntityEids('moving')).toEqual([entity.eid]);
+			expect(system.getPendingDelta().added).toEqual([entity.eid]);
+
+			// The add delta refreshes the already-cached main-query entry. The worker can therefore see the newly
+			// optional movement block on this run and request its removal.
+			system.componentAction = 'remove';
+			system.run(16);
+			await flush();
+
+			expect(entity.components.movement).toBeUndefined();
+			expect(system.getQueryEntityEids('moving')).toEqual([]);
+			expect(system.getPendingDelta().added).toEqual([entity.eid]);
+			expect(system.getPendingDelta('moving').removed).toEqual([entity.eid]);
+		});
+
 		it('runs the update, mutating shared memory and emitting events', async () => {
 			let system = useSystem(new DamageSystem(world, mode));
 			await initSystem(system);
@@ -791,5 +818,45 @@ class TypeReadSystem extends EntityWorkerSystem<Components, { entity: Uint32Arra
 			forceMainThread: mode === 'main-thread',
 			getWorker: () => new Worker(TYPE_READ_WORKER_URL, { type: 'module' }),
 		});
+	}
+}
+
+class ComponentChangeSystem extends EntityWorkerSystem<
+	Components,
+	Pick<ComponentArrays, 'health'> & Partial<Pick<ComponentArrays, 'movement'>>,
+	ComponentChangeWorld
+> {
+	componentAction?: 'add' | 'remove';
+
+	constructor(world: TestWorld, mode: Mode) {
+		super(world, {
+			name: 'ComponentChangeSystem',
+			required: ['health'],
+			optional: ['movement'],
+			queries: {
+				moving: { required: ['movement'] },
+			},
+			updateFunction: componentChangeUpdate,
+			addsComponents: true,
+			forceMainThread: mode === 'main-thread',
+			getWorker: () => new Worker(COMPONENT_CHANGE_WORKER_URL, { type: 'module' }),
+		});
+	}
+
+	addDataToWorld(world: ComponentChangeWorld): void {
+		world.componentAction = this.componentAction;
+	}
+
+	getQueryEntityEids(queryName: string): Array<number> {
+		return eidsOf(this.queryEntities[queryName]);
+	}
+
+	getPendingDelta(queryName = '___main'): { added: Array<number>, removed: Array<number> } {
+		const deltas = Reflect.get(this, 'queryDeltas') as { [key: string]: { added: Set<BaseEntity<Components>>, removed: Set<number> } };
+		const delta = deltas[queryName];
+		return {
+			added: delta ? Array.from(delta.added, entity => entity.eid) : [],
+			removed: delta ? Array.from(delta.removed) : [],
+		};
 	}
 }

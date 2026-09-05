@@ -29,7 +29,7 @@ Run type-check and lint after every edit (AGENTS.md).
 | `index.ts` | Public barrel (main-thread entry). |
 | `worker.ts` | `/worker` subpath barrel — only what runs in a worker, keeps worker bundles tiny. |
 | `world.ts` | `BaseWorld<R,C,Cfg>`: owns the heap, the `constantStrings` cache, the heap-backed atomic eid counter (`allocateEid`, unique across threads), the registry (one `MemoryComponent` per component), `entities` (Map by eid), systems, the update loop, clocks (`gameTime`/`playerTime`/`timeScale`/`paused`), add/remove-entity → system wiring, `onEntityDied` (fires the component `died` hooks + `entity-died` event, then `removeEntity` — see Entity death), the deferred component-free buffers (`deferComponentMemoryFree`/`notifySystemRunCompleted`), and reuse via `load` / async `clear` gated by the `pristine` flag. `getSharedComponentMemory()` ships each pool + the eid counter to workers; `adoptEntity()` materializes an entity a worker created off-thread. Re-emits the heap's buffer-growth as a `grow-buffer` event, and `addGrownBuffer()` adopts a buffer a worker grew (then fans it out) so worker heaps stay in sync both ways. |
-| `entity.ts` | `BaseEntity<C,Cfg>`: eid (from `world.allocateEid()`, a heap atomic — unique across threads; or a pre-minted `adoptEid` for worker-created entities) + component bag; `load`/`save`/`finishLoading`, `loadComponent` (create block from `toBlock` then `attach`), `attachComponent` (adopt a worker-written block by index — `attach` only), `removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. Both `loadComponent`/`attachComponent` ensure `component.block` holds the typed-array view (`??= memory.getBlock(index)` — a `Component` subclass already set it, a plain-object accessor gets it filled in), so query-delta building reuses this instead of re-fetching (a `getBlock` gives a fresh subarray each call) per system the entity joins. `removeComponent`/`deleteAllComponentMemory` call the definition's optional `free(component)` (release extra heap the component owns) then defer the block free to the world rather than freeing inline; whole-entity deletion is guarded so repeated removal cannot queue the same blocks twice. EventEmitter. |
+| `entity.ts` | `BaseEntity<C,Cfg>`: eid (from `world.allocateEid()`, a heap atomic — unique across threads; or a pre-minted `adoptEid` for worker-created entities) + component bag; `load`/`save`/`finishLoading`, `loadComponent` (create block from `toBlock` then `attach`), `attachComponent` (adopt a worker-written block by index, optionally emitting `component-added`), `removeComponent`/`setComponent`(`Bulk`)/`deleteComponent`. Both `loadComponent`/`attachComponent` ensure `component.block` holds the typed-array view (`??= memory.getBlock(index)` — a `Component` subclass already set it, a plain-object accessor gets it filled in), so query-delta building reuses this instead of re-fetching (a `getBlock` gives a fresh subarray each call) per system the entity joins. `removeComponent`/`deleteAllComponentMemory` call the definition's optional `free(component)` (release extra heap the component owns) then defer the block free to the world rather than freeing inline; whole-entity deletion is guarded so repeated removal cannot queue the same blocks twice. EventEmitter. |
 | `entity-component.ts` | The always-present `entity` component (`type`, `dead`, `isStatic`), all worker-visible in memory. `type` is stored as a pointer to an interned `ConstantString` (see `constant-string-cache.ts`); the `type` accessor resolves it through `world.constantStrings`. Exports `DEAD_INDEX`, `STATIC_INDEX`, `TYPE_INDEX`, `entityDefinition`. |
 | `constant-string-cache.ts` | `ConstantStringCache`: interns immutable strings (from `@daneren2005/shared-memory-objects`'s `ConstantString`) in the heap and resolves a stored pointer back to its string. `getOrCreate(value)` dedupes so identical values share one allocation; `getString(pointer)` is a Map hit before rebuilding from memory. The main thread creates+interns (`world.constantStrings`); each worker reconstructs its own cache over the same buffers to resolve pointers. |
 | `entity-factory.ts` | `EntityFactory<C,Cfg>`: maps entity `type` → base config template; layers caller config over it. `loadEntity` builds + adds to world. Override `createEntity` for subclass-per-type. |
@@ -55,7 +55,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
 
 | File | Responsibility |
 | --- | --- |
-| `workers/create-entity-system-worker.ts` | `createEntitySystemWorker(self, updateFn, registry?)` — worker entry helper. Pass the component registry only for a worker that creates entities (gives it each `toBlock`). |
+| `workers/create-entity-system-worker.ts` | `createEntitySystemWorker(self, updateFn, registry?)` — worker entry helper. Pass the component registry only for a worker that creates entities or adds components (gives it each `toBlock`). |
 | `workers/create-system-worker.ts` | `createSystemWorker(self, runFn, registry?)` — worker entry helper for a `WorkerSystem`; wraps the single run function via `toEntityUpdateFunction` (run fn → `preRun`) and delegates to `createEntitySystemWorker`. Also the home of the `WorkerSystemRunFunction` type. Worker-safe (no main-thread system imports), so it stays in the `/worker` bundle. |
 | `workers/entity-system-web-worker.ts` | Main-thread side of the worker (message plumbing). |
 | `workers/entity-system-worker-message.ts` | Message + `EntityEvent`/`SystemEvents` types across the boundary. |
@@ -63,6 +63,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
 | `workers/web-worker.ts` | `WebWorker` wrapper. |
 | `actions/kill-entity.ts` / `kill-entity-worker.ts` | Mark an entity dead (main / worker side). |
 | `actions/create-entity-worker.ts` | `createEntityWorker(world, config, callbacks)`: create an entity from a factory config off-thread (via `world.buildEntityDescriptor`), report the descriptor for the main thread to adopt. |
+| `actions/add-component-worker.ts` / `remove-component-worker.ts` | Worker helpers that queue structural changes for the main thread to apply after the run. Addition allocates/writes a block through `world.buildComponentDescriptor`; removal is a descriptor-only callback. |
 | `actions/build-worker-entity.ts` | `buildWorkerEntity(config, factoryConfigs, registry, allocator)`: shared config→descriptor builder (template merge + per-component `toBlock` allocation); used by the real worker and the main-thread fallback. |
 
 ## Core data flow
@@ -161,7 +162,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
   a buffer only it holds; any *other* thread that reads such a pointer before the buffer message arrives dereferences
   `heap.buffers[pos] === undefined` and throws. To prevent this, `world.runUpdate` calls `heap.ensureSpareBuffer()`
   **before dispatching any run** (gated on `needsSpareBuffer`: at least one off-thread `EntityWorkerSystem` with
-  `createsEntities`). `ensureSpareBuffer` (in shared-memory-objects) grows one empty buffer on the **main thread** if
+  `createsEntities` or `addsComponents`). `ensureSpareBuffer` (in shared-memory-objects) grows one empty buffer on the **main thread** if
   none is free (cheap `MemoryBuffer.isEmpty` scan), firing the grow handlers so the `grow-buffer` message is queued to
   every worker *before* its `run` message (postMessage is FIFO) — so a worker's allocations always land in a buffer
   every thread already holds, and no worker ever grows into fresh territory. This is a **best-effort spare of one
@@ -192,9 +193,16 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
   once per run before the entity pass; `entityRemoved` runs once per entity that left the system this run.
 - **Worker report-back:** update functions write shared memory directly; anything needing
   the main thread goes through `callbacks` — `entityComponentChanged` (`component-property-updated`),
-  `entityDied` (`death`), `createEntity` (a `WorkerCreatedEntity` descriptor → `world.adoptEntity`), plus
+  `entityDied` (`death`), `createEntity` (a `WorkerCreatedEntity` descriptor → `world.adoptEntity`), component
+  additions/removals (structural descriptors applied after iteration), plus
   `emitEntityEvent` (per-entity, arbitrary args, structured-cloned) and `emitSystemEvent` (per-run, one array of
   ids, allocation-free).
+- **Runtime component changes:** main-thread `loadComponent`/`removeComponent` events recheck affected systems.
+  `EntityWorkerSystem.checkAddEntity` upserts even an entity whose membership did not change, so adding/removing an
+  optional component rebuilds and re-sends that existing entity's complete component bundle. Worker update functions
+  use `addComponentWorker`/`removeComponentWorker`; changes are collected during a stable run snapshot, applied on
+  run-complete, and become worker-visible through the next query delta. Addition requires `addsComponents: true` and
+  component definitions in the worker entry; it uses the same spare-buffer safeguard as worker entity creation.
 
 ## Conventions / gotchas
 

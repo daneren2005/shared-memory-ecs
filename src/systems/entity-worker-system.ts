@@ -65,7 +65,7 @@ export default abstract class EntityWorkerSystem<
 				this.worker.postMessage({ type: 'grow-buffer', buffer });
 			});
 		} else {
-			this.worker = new EntitySystemWebWorker(options.updateFunction, world, !!options.createsEntities);
+			this.worker = new EntitySystemWebWorker(options.updateFunction, world, !!options.createsEntities, !!options.addsComponents);
 			this.isWorkerThread = false;
 		}
 
@@ -101,6 +101,26 @@ export default abstract class EntityWorkerSystem<
 				// User-code errors caught inside the run: log + emit on the main thread, one per failure.
 				message.errors.forEach(({ error, entityId, phase }) => {
 					this.onError(error, { entityId, phase });
+				});
+
+				// Structural changes are applied only after the worker has finished iterating its snapshot. Attaching emits
+				// the same entity events as a main-thread mutation, which rechecks every affected system/query and queues
+				// refreshed component bundles for their next run.
+				(message.componentChanges ?? []).forEach(change => {
+					const entity = this.world.getEntityByEid(change.entityId);
+					if(change.type === 'add') {
+						const definition = this.world.registry[change.component.name as keyof C];
+						if(!entity || !definition || change.component.name === 'entity') {
+							definition?.memoryComponent.delete(change.component.index);
+							return;
+						}
+
+						const componentName = change.component.name as keyof C;
+						entity.removeComponent(componentName);
+						entity.attachComponent(componentName, change.component.index, true);
+					} else if(entity && change.componentName !== 'entity') {
+						entity.removeComponent(change.componentName);
+					}
 				});
 
 				// Before the per-entity events: an entity killed this run is still in the world here, since `death`
@@ -175,6 +195,7 @@ export default abstract class EntityWorkerSystem<
 			sharedMemory: this.isWorkerThread ? this.world.getSharedComponentMemory() : undefined,
 			// Factory templates only go to workers that create entities.
 			factoryConfigs: this.isWorkerThread && this.options.createsEntities ? this.world.factory.configs : undefined,
+			addsComponents: !!this.options.addsComponents,
 		};
 		this.worker.postMessage(message);
 
@@ -442,6 +463,9 @@ export interface EntityWorkerSystemWorld {
 	// Injected each run on a system registered with createsEntities: builds a WorkerCreatedEntity descriptor from a
 	// factory config (merges the type's template, allocates + writes each component's block). Drives createEntityWorker.
 	buildEntityDescriptor?(config: WorkerCreateEntityConfig): WorkerCreatedEntity
+	// Injected for systems with addsComponents. Allocates/writes a block off-thread; the main thread attaches it
+	// after run completion so no running update observes a changing component set.
+	buildComponentDescriptor?(name: string, config: Record<string, unknown>): WorkerCreatedComponent
 }
 // What a game passes to createEntityWorker: a factory-style config - the entity `type` plus any overrides layered
 // over that type's factory template. The worker merges template + overrides, then allocates + writes each triggered
@@ -457,6 +481,15 @@ export interface WorkerCreatedEntity {
 	components: { [name: string]: number }
 }
 
+export interface WorkerCreatedComponent {
+	name: string
+	index: number
+}
+
+export type WorkerComponentChange =
+	| { type: 'add', entityId: number, component: WorkerCreatedComponent }
+	| { type: 'remove', entityId: number, componentName: string };
+
 export interface EntityWorkerSystemCallbacks<C extends ComponentMap = ComponentMap> {
 	entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]): void
 	// Args are structured-cloned, so plain values only.
@@ -466,6 +499,8 @@ export interface EntityWorkerSystemCallbacks<C extends ComponentMap = ComponentM
 	emitSystemEvent(event: string, entityId: number): void
 	entityDied(entityId: number): void
 	createEntity(entity: WorkerCreatedEntity): void
+	addComponent(entityId: number, component: WorkerCreatedComponent): void
+	removeComponent<K extends keyof C>(entityId: number, componentName: K): void
 }
 
 export interface EntityWorkerSystemQuery<C extends ComponentMap = ComponentMap> {
@@ -489,6 +524,9 @@ export interface EntityWorkerSystemConfig<
 	// system's worker on load so it can merge templates; the worker entry must also pass the component registry to
 	// createEntitySystemWorker so it has each component's toBlock(). Only systems that create entities need either.
 	createsEntities?: boolean
+	// Opt in to worker-side component allocation through addComponentWorker. The worker entry must also pass the
+	// component registry to createEntitySystemWorker so the worker has each component's toBlock().
+	addsComponents?: boolean
 
 	queries?: { [key: string]: EntityWorkerSystemQuery<C> }
 }

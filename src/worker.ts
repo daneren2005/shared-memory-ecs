@@ -6,6 +6,8 @@ export type { EntitySystemWorkerScope } from './systems/workers/create-entity-sy
 export { default as createSystemWorker } from './systems/workers/create-system-worker';
 export type { WorkerSystemRunFunction } from './systems/workers/create-system-worker';
 export { default as createEntityWorker } from './actions/create-entity-worker';
+export { default as addComponentWorker } from './actions/add-component-worker';
+export { default as removeComponentWorker } from './actions/remove-component-worker';
 export { default as killEntityWorker } from './actions/kill-entity-worker';
 export { DEAD_INDEX, TYPE_INDEX } from './entity-component';
 
@@ -17,6 +19,8 @@ export type {
 	WorkerAllocator,
 	WorkerCreateEntityConfig,
 	WorkerCreatedEntity,
+	WorkerCreatedComponent,
+	WorkerComponentChange,
 	EntityUpdateComponents,
 	EntityQueryComponents,
 	EntityUpdateFunction,

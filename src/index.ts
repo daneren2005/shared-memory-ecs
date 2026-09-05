@@ -12,6 +12,8 @@ export type {
 export { default as killEntity } from './actions/kill-entity';
 export { default as killEntityWorker } from './actions/kill-entity-worker';
 export { default as createEntityWorker } from './actions/create-entity-worker';
+export { default as addComponentWorker } from './actions/add-component-worker';
+export { default as removeComponentWorker } from './actions/remove-component-worker';
 export { default as PerformanceTiming, DEFAULT_TICKS_BETWEEN_UPDATES } from './performance-timing';
 export type {
 	TimingStats,
@@ -51,6 +53,8 @@ export type {
 	WorkerAllocator,
 	WorkerCreateEntityConfig,
 	WorkerCreatedEntity,
+	WorkerCreatedComponent,
+	WorkerComponentChange,
 	EntityUpdateComponents,
 	EntityQueryComponents,
 	EntityUpdateFunction,

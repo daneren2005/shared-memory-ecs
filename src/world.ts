@@ -138,11 +138,13 @@ export default class BaseWorld<
 		this.emit('grow-buffer', data);
 	}
 
-	// Only an off-thread EntityWorkerSystem that creates entities allocates in a worker, so only then is a pre-fanned-out
-	// spare buffer worth keeping (growing one otherwise just wastes a whole buffer). The main-thread fallback allocates
-	// on the main thread, where growth fans out inline, so it never needs one.
+	// Only an off-thread EntityWorkerSystem that creates entities or adds components allocates in a worker, so only
+	// then is a pre-fanned-out spare buffer worth keeping. The main-thread fallback allocates on the main thread, where
+	// growth fans out inline, so it never needs one.
 	private get needsSpareBuffer(): boolean {
-		return this.systems.some(system => system instanceof EntityWorkerSystem && system.isWorkerThread && !!system.options.createsEntities);
+		return this.systems.some(system => system instanceof EntityWorkerSystem
+			&& system.isWorkerThread
+			&& (!!system.options.createsEntities || !!system.options.addsComponents));
 	}
 
 	async init() {
