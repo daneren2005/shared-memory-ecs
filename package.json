@@ -2,7 +2,7 @@
 	"name": "@daneren2005/shared-memory-ecs",
 	"description": "A small, reusable Entity/Component/System core backed by shared memory.",
 	"author": "Scott Jackson",
-	"version": "1.7.0",
+	"version": "1.8.0",
 	"type": "module",
 	"sideEffects": false,
 	"repository": {
@@ -26,6 +26,18 @@
 			"import": {
 				"types": "./dist/worker.d.ts",
 				"default": "./dist/worker.js"
+			}
+		},
+		"./node": {
+			"import": {
+				"types": "./dist/node/node-worker-adapter.d.ts",
+				"default": "./dist/node.js"
+			}
+		},
+		"./node-worker-self": {
+			"import": {
+				"types": "./dist/node/worker-self.d.ts",
+				"default": "./dist/node-worker-self.js"
 			}
 		}
 	},

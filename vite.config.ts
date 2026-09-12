@@ -9,6 +9,8 @@ export default defineConfig({
 			entry: {
 				index: 'src/index.ts',
 				worker: 'src/worker.ts',
+				node: 'src/node/node-worker-adapter.ts',
+				'node-worker-self': 'src/node/worker-self.ts',
 			},
 			formats: ['es'],
 		},
@@ -17,6 +19,7 @@ export default defineConfig({
 		rollupOptions: {
 			external: [
 				/^@daneren2005\/shared-memory-objects(\/.*)?$/,
+				/^node:.*$/,
 			],
 		},
 	},
