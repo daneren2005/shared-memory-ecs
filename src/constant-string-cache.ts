@@ -44,7 +44,7 @@ export default class ConstantStringCache {
 			return cached;
 		}
 
-		const memory = getPointer(pointer);
+		const memory = getPointer(pointer, this.heap.positionBits);
 		if(this.heap.buffers[memory.bufferPosition] === undefined) {
 			return undefined;
 		}

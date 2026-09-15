@@ -30,6 +30,17 @@ describe('ConstantStringCache', () => {
 		expect(new ConstantStringCache(heap).getString(string.pointer)).toEqual('Miner');
 	});
 
+	it('resolves pointers from a cloned heap with non-default buffer sizes', () => {
+		const heap = new MemoryHeap({ bufferSize: 8 * 1024 ** 2 });
+		const writer = new ConstantStringCache(heap);
+		const first = writer.getOrCreate('asteroidMiner');
+		const second = writer.getOrCreate('freeLanceShipTrader');
+		const reader = new ConstantStringCache(new MemoryHeap(heap.getSharedMemory()));
+
+		expect(reader.getString(first.pointer)).toBe('asteroidMiner');
+		expect(reader.getString(second.pointer)).toBe('freeLanceShipTrader');
+	});
+
 	it('treats pointer 0 as the empty string', () => {
 		const cache = new ConstantStringCache(new MemoryHeap());
 		expect(cache.getString(0)).toEqual('');
