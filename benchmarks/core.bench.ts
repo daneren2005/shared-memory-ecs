@@ -1,4 +1,4 @@
-import { bench, describe } from 'vitest';
+import { describe, test } from 'vitest';
 import { BaseWorld, EntityWorkerSystem, EntitySystem, System } from '../src/index';
 import type { BaseEntity, EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityUpdateFunction } from '../src/index';
 import { registry, type Components, type TestWorld } from '../src/__tests__/fixtures/components';
@@ -98,50 +98,62 @@ for(const size of SIZES) {
 			churnEntities = Array.from(stableWorld.entities.values()).slice(0, Math.max(1, Math.floor(size / 100)));
 		}
 
-		bench('stable EntityWorkerSystem query', () => {
-			initialize();
-			stableWorld.update(16);
-		}, BENCH_OPTIONS);
+		test('stable EntityWorkerSystem query', async ({ bench }) => {
+			await bench('stable EntityWorkerSystem query', () => {
+				initialize();
+				stableWorld.update(16);
+			}).run(BENCH_OPTIONS);
+		});
 
-		bench('1% component membership churn', () => {
-			initialize();
-			for(const entity of churnEntities) {
-				if(churnHasMovement) {
-					entity.removeComponent('movement');
-				} else {
-					entity.loadComponent('movement', { speed: 1 });
+		test('1% component membership churn', async ({ bench }) => {
+			await bench('1% component membership churn', () => {
+				initialize();
+				for(const entity of churnEntities) {
+					if(churnHasMovement) {
+						entity.removeComponent('movement');
+					} else {
+						entity.loadComponent('movement', { speed: 1 });
+					}
 				}
-			}
-			churnHasMovement = !churnHasMovement;
-			stableWorld.update(16);
-		}, BENCH_OPTIONS);
+				churnHasMovement = !churnHasMovement;
+				stableWorld.update(16);
+			}).run(BENCH_OPTIONS);
+		});
 
-		bench('EntitySystem iteration', () => {
-			initialize();
-			iterableWorld.update(16);
-		}, BENCH_OPTIONS);
+		test('EntitySystem iteration', async ({ bench }) => {
+			await bench('EntitySystem iteration', () => {
+				initialize();
+				iterableWorld.update(16);
+			}).run(BENCH_OPTIONS);
+		});
 
-		bench('batched worker-style system events', () => {
-			initialize();
-			eventWorld.update(16);
-		}, BENCH_OPTIONS);
+		test('batched worker-style system events', async ({ bench }) => {
+			await bench('batched worker-style system events', () => {
+				initialize();
+				eventWorld.update(16);
+			}).run(BENCH_OPTIONS);
+		});
 
-		bench('32-system dispatch', () => {
-			initialize();
-			dispatchWorld.update(16);
-		}, BENCH_OPTIONS);
+		test('32-system dispatch', async ({ bench }) => {
+			await bench('32-system dispatch', () => {
+				initialize();
+				dispatchWorld.update(16);
+			}).run(BENCH_OPTIONS);
+		});
 
-		bench('1% spawn/despawn burst', () => {
-			initialize();
-			const spawned: Array<BaseEntity<Components>> = [];
-			const count = Math.max(1, Math.floor(size / 100));
-			for(let i = 0; i < count; i++) {
-				spawned.push(stableWorld.loadEntity({ maxHealth: 100 }));
-			}
-			for(const entity of spawned) {
-				stableWorld.removeEntity(entity);
-			}
-			stableWorld.update(16);
-		}, BENCH_OPTIONS);
+		test('1% spawn/despawn burst', async ({ bench }) => {
+			await bench('1% spawn/despawn burst', () => {
+				initialize();
+				const spawned: Array<BaseEntity<Components>> = [];
+				const count = Math.max(1, Math.floor(size / 100));
+				for(let i = 0; i < count; i++) {
+					spawned.push(stableWorld.loadEntity({ maxHealth: 100 }));
+				}
+				for(const entity of spawned) {
+					stableWorld.removeEntity(entity);
+				}
+				stableWorld.update(16);
+			}).run(BENCH_OPTIONS);
+		});
 	});
 }

@@ -5,6 +5,7 @@
 	"version": "1.7.2",
 	"type": "module",
 	"sideEffects": false,
+	"license": "MIT",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/daneren2005/shared-memory-ecs.git"
@@ -61,17 +62,17 @@
 	"devDependencies": {
 		"@semantic-release/git": "^10.0.1",
 		"@stylistic/eslint-plugin": "^5.10.0",
-		"@types/node": "^26.1.1",
-		"@vitest/web-worker": "^4.1.10",
+		"@types/node": "^26.6.1",
+		"@vitest/web-worker": "^5.0.1",
 		"cross-env": "^10.1.0",
 		"husky": "^9.1.7",
-		"lint-staged": "^17.0.8",
-		"oxlint": "^1.73.0",
-		"oxlint-tsgolint": "^0.24.0",
-		"semantic-release": "^25.0.6",
+		"lint-staged": "^17.5.1",
+		"oxlint": "^1.83.0",
+		"oxlint-tsgolint": "^7.0.2001",
+		"semantic-release": "^25.0.9",
 		"typescript": "^7.0.2",
-		"vite": "^8.1.4",
-		"vitest": "^4.1.10"
+		"vite": "^8.3.0",
+		"vitest": "^5.0.1"
 	},
 	"peerDependencies": {
 		"@daneren2005/shared-memory-objects": "^1.5.2"

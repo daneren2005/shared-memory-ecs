@@ -107,6 +107,14 @@ export default defineConfig({
 	ignorePatterns: [
 		'.cache',
 	],
+	overrides: [
+		{
+			files: ['benchmarks/**/*.bench.ts'],
+			rules: {
+				'vitest/expect-expect': 'off',
+			},
+		},
+	],
 	options: {
 		// Adds 3-4 seconds to lint time
 		typeAware: true,
