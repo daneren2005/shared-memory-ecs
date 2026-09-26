@@ -72,6 +72,8 @@ export type {
 	EntityUpdateFunction,
 	EntityUpdateInitFunction,
 	EntityUpdatePreRunFunction,
+	EntityQueryChangedFunction,
+	QueryDelta,
 	EntityRemovedFunction,
 	UpdateEntityConfig,
 	UpdateEntityConfigObject,

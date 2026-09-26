@@ -62,11 +62,11 @@ export interface EntityEvent {
 	args: Array<unknown>
 }
 
-// An error thrown by user code (preRun / a per-entity update / entityRemoved) during a worker run, reported back
+// An error thrown by user code (queryChanged / preRun / a per-entity update / entityRemoved) during a worker run, reported back
 // so the main thread logs it and emits `system-error`. Error is structured-cloneable across the worker boundary.
 export interface WorkerRunError {
 	error: Error
-	phase: 'preRun' | 'update' | 'entityRemoved'
+	phase: 'queryChanged' | 'preRun' | 'update' | 'entityRemoved'
 	entityId?: number
 }
 

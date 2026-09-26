@@ -2,17 +2,18 @@ import createEntitySystemWorker, { type EntitySystemWorkerScope } from './create
 import type { ComponentDefinitionMap, ComponentMap } from '../../component-definition';
 import type {
 	EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityQueryComponents, EntityUpdateComponents,
-	EntityUpdateFunction, EntityUpdateInitFunction, EntityRemovedFunction,
+	EntityUpdateFunction, EntityUpdateInitFunction, EntityRemovedFunction, EntityQueryChangedFunction,
 } from '../entity-worker-system';
 
 // A WorkerSystem's single per-run function: called once per run over the named sub-queries, not once per entity.
-// Optional `init`/`entityRemoved` mirror EntityUpdateFunction's hooks.
+// Optional `init`/`queryChanged`/`entityRemoved` mirror EntityUpdateFunction's hooks.
 export type WorkerSystemRunFunction<
 	C extends ComponentMap,
 	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
 > = ((world: W, queries: EntityQueryComponents<C>, callbacks: EntityWorkerSystemCallbacks<C>) => void) & {
 	init?: EntityUpdateInitFunction<W, D>
+	queryChanged?: EntityQueryChangedFunction<C, W>
 	entityRemoved?: EntityRemovedFunction<C, W>
 };
 
@@ -27,6 +28,9 @@ export function toEntityUpdateFunction<
 	updateFunction.preRun = (world, _entities, queries, callbacks) => run(world, queries, callbacks);
 	if(run.init) {
 		updateFunction.init = run.init;
+	}
+	if(run.queryChanged) {
+		updateFunction.queryChanged = run.queryChanged;
 	}
 	if(run.entityRemoved) {
 		updateFunction.entityRemoved = run.entityRemoved;

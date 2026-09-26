@@ -411,6 +411,7 @@ export type EntityUpdateFunction<
 	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
 > = EntityUpdateFunctionImpl<C, T, W> & {
+	queryChanged?: EntityQueryChangedFunction<C, W>
 	preRun?: EntityUpdatePreRunFunction<C, T, W>
 	entityRemoved?: EntityRemovedFunction<C, W>
 	init?: EntityUpdateInitFunction<W, D>
@@ -420,6 +421,14 @@ export type EntityUpdatePreRunFunction<C extends ComponentMap, T extends EntityU
 	world: W,
 	entities: Array<UpdateEntityConfigObject<T>>,
 	queries: EntityQueryComponents<C>,
+	callbacks: EntityWorkerSystemCallbacks<C>,
+) => void;
+// Called once per sub-query whose membership changed this run, before preRun. `added` can repeat an entity already
+// in the query (its component bundle was refreshed), so treat it as an upsert.
+export type EntityQueryChangedFunction<C extends ComponentMap = ComponentMap, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld> = (
+	world: W,
+	queryName: string,
+	delta: QueryDelta<EntityUpdateComponents<C>>,
 	callbacks: EntityWorkerSystemCallbacks<C>,
 ) => void;
 export type EntityRemovedFunction<C extends ComponentMap = ComponentMap, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld> = (

@@ -49,7 +49,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
 | `system.ts` | `System<C>` abstract base: fixed-timestep `deltaBetweenRuns`, `update`→`run`, `shouldRun`, `firstRun`, plus the overridable `init`/`finishLoading` startup pair. `onRunFinished` (fires `world.notifySystemRunCompleted`) and `isCurrentlyRunning()` let the world's deferred free tell when a system is done with memory; `waitForRunToComplete()` (a no-op base, real promise in `EntityWorkerSystem`) lets `world.clear()` await an in-flight run. EventEmitter (systems report a whole run in one emit). |
 | `iterable-system.ts` | `IterableSystem<C,T>`: spreads one pass over multiple frames when it exceeds `maxMsPerFrame` (`iterationsPerCheck`, `getIterables`/`updateIterable`). |
 | `entity-system.ts` | `EntitySystem<C,T>`: main-thread iteration over entities owning `options.components`; auto add/remove via world events; `entities` Map by eid; `filterEntity` skips static. A sliced multi-frame run remains runnable until its queue drains, and revalidates each queued entity against current membership before updating it. |
-| `entity-worker-system.ts` | `EntityWorkerSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks, and the update-function hooks (`init`/`preRun`/`entityRemoved`). The largest / most involved file. |
+| `entity-worker-system.ts` | `EntityWorkerSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks, and the update-function hooks (`init`/`queryChanged`/`preRun`/`entityRemoved`; `queryChanged` receives each changed sub-query's delta before `preRun`). The largest / most involved file. |
 | `worker-system.ts` | `WorkerSystem<C,W,D>`: an `EntityWorkerSystem` that calls its function **once per run** over the named sub-queries instead of once per entity. It has **no main query** (`required` is forced `[]`, `checkAddEntity` never populates `this.entities`), and `shouldRun()` is always `true` so the `deltaBetweenRuns` cadence drives one run per interval even with zero entities. Reuses the whole EntityWorkerSystem worker/query/`createsEntities`/`addDataToWorld` machinery: the single run function `(world, queries, callbacks)` is wrapped as the update function's `preRun` (per-entity body a no-op) by `toEntityUpdateFunction`. Fresh per-run data is the existing `addDataToWorld(world)` channel (structured-cloned each run, so plain/cloneable). |
 
 ### Workers (`src/systems/workers/`) and actions (`src/actions/`)
@@ -79,7 +79,7 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
   `{ entities: Cfg[], gameTime?, playerTime?, timeScale? }`.
 - **Update:** `world.update(dt)` → `update-started` → per system `shouldRun`/`update`
   (timeScale-scaled, skipped while paused) → `update-finished`.
-- **Error handling:** user code (an update body, `preRun`, `entityRemoved`, an `EntitySystem`'s `updateEntity` /
+- **Error handling:** user code (an update body, `queryChanged`, `preRun`, `entityRemoved`, an `EntitySystem`'s `updateEntity` /
   `beforeRunIterables`) never aborts a whole run when it throws. Each is wrapped in try/catch: a per-entity failure
   is logged and the run continues with the next entity; a `preRun`/`beforeRunIterables` failure skips that run's
   entity loop entirely. Every failure surfaces on the main thread as a `world.emit('system-error', SystemError)`
@@ -191,9 +191,11 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
   fallback. The descriptor returns the template-derived class key; `world.adoptEntity` asks the main-thread factory
   for that wrapper, validates its component indexes against the allowlist, and attaches without reallocation.
 - **Worker update-function hooks:** besides the per-entity body, an `updateFunction` may carry `init`,
-  `preRun`, and `entityRemoved`. `init(data)` runs on every `finishLoading` — `data` comes from the
+  `queryChanged`, `preRun`, and `entityRemoved`. `init(data)` runs on every `finishLoading` — `data` comes from the
   system's `getInitData()` (typed via the `D` param) — and its returned `Partial<W>` is merged onto `world`
-  every run, so worker-local state (seeded RNG, lookup tables) persists without re-sending. `preRun` runs
+  every run, so worker-local state (seeded RNG, lookup tables) persists without re-sending. `queryChanged` runs
+  before `preRun`, once per sub-query whose membership changed, with its `{ added, removed }` delta (`added` is an
+  upsert); a failure is reported and the run continues. `preRun` runs
   once per run before the entity pass; `entityRemoved` runs once per entity that left the system this run.
 - **Worker report-back:** update functions write shared memory directly; anything needing
   the main thread goes through `callbacks` — `entityComponentChanged` (`component-property-updated`),

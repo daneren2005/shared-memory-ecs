@@ -26,6 +26,8 @@ export type {
 	EntityUpdateFunction,
 	EntityUpdateInitFunction,
 	EntityUpdatePreRunFunction,
+	EntityQueryChangedFunction,
+	QueryDelta,
 	EntityRemovedFunction,
 	UpdateEntityConfigObject,
 } from './systems/entity-worker-system';

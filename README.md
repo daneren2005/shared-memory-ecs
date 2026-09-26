@@ -273,7 +273,7 @@ class DamageSystem extends EntityWorkerSystem<Components, { health: Int32Array }
 }
 ```
 
-### Update-function hooks: `init` and `preRun`
+### Update-function hooks: `init`, `queryChanged` and `preRun`
 
 `addDataToWorld` runs on the main thread and re-sends its data every run. When the data instead needs to
 *live in the worker* — computed once, or too big to ship each frame — attach hooks to the update function
@@ -331,6 +331,21 @@ damageUpdate.preRun = (world, entities, queries, callbacks) => {
 };
 ```
 
+**`queryChanged`** runs before `preRun`, once for each sub-query in `queries` whose membership changed this run,
+with that query's name and its `{ added, removed }` delta. Use it to keep a worker-local structure in sync with a
+set of entities that rarely changes - a navigation grid of static walls, a lookup of static targets - instead of
+rescanning the whole query every run. `added` can repeat an entity already in the query (its components changed
+and its blocks were re-sent), so treat it as an upsert. Keep that structure on the `init`-returned state so a
+reloaded world rebuilds it from scratch; the reload re-sends every member as added:
+
+```ts
+wallUpdate.init = () => ({ walls: new Map<number, Rect>() });
+wallUpdate.queryChanged = (world, queryName, delta) => {
+	delta.removed.forEach(entityId => world.walls.delete(entityId));
+	delta.added.forEach(({ entityId, components }) => world.walls.set(entityId, rectOf(components.transform)));
+};
+```
+
 (An `entityRemoved(world, entityId, callbacks)` hook completes the set — it fires once per entity that left
 the system this run, so a worker can release any per-entity state it was holding.)
 
@@ -375,7 +390,7 @@ import { createSystemWorker } from '@daneren2005/shared-memory-ecs/worker';
 createSystemWorker(self, spawnerUpdate, registry);
 ```
 
-The run function may carry the same `init` / `entityRemoved` hooks as an `updateFunction`. Everything else —
+The run function may carry the same `init` / `queryChanged` / `entityRemoved` hooks as an `updateFunction`. Everything else —
 callbacks, worker fallback, off-thread creation — behaves exactly as an `EntityWorkerSystem`.
 
 ### Importing in workers

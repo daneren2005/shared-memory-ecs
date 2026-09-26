@@ -9,6 +9,7 @@ import { queryTargetUpdate } from '../../__tests__/fixtures/query-target-update'
 import { typeReadUpdate, TYPE_READ_EVENT } from '../../__tests__/fixtures/type-read-update';
 import { errorUpdate, POISON_MAX_HEALTH, type ErrorWorld } from '../../__tests__/fixtures/error-update';
 import { componentChangeUpdate, type ComponentChangeWorld } from '../../__tests__/fixtures/component-change-update';
+import { queryChangedUpdate, QUERY_ADDED_EVENT, QUERY_REMOVED_EVENT, TRACKED_EVENT, type QueryChangedWorld } from '../../__tests__/fixtures/query-changed-update';
 import type { SystemError } from '../../index';
 
 // Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.
@@ -20,6 +21,7 @@ const QUERY_TARGET_WORKER_URL = new URL('../../__tests__/fixtures/query-target.w
 const TYPE_READ_WORKER_URL = new URL('../../__tests__/fixtures/type-read.worker.ts', import.meta.url);
 const ERROR_WORKER_URL = new URL('../../__tests__/fixtures/error.worker.ts', import.meta.url);
 const COMPONENT_CHANGE_WORKER_URL = new URL('../../__tests__/fixtures/component-change.worker.ts', import.meta.url);
+const QUERY_CHANGED_WORKER_URL = new URL('../../__tests__/fixtures/query-changed.worker.ts', import.meta.url);
 
 // Every test runs against both backends: 'main-thread' (EntitySystemWebWorker) and 'worker' (a real worker
 // module). Both must produce identical observable behavior.
@@ -35,6 +37,13 @@ interface StubOptions {
 // Waits a macrotask for a worker-mode run-complete message; a noop wait in main-thread mode.
 function flush(): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+// Collects each batch of ids a system event carries.
+function record(system: System<Components>, event: string): Array<Array<number>> {
+	const batches: Array<Array<number>> = [];
+	system.on(event, (entityIds: Array<number>) => batches.push(entityIds));
+	return batches;
 }
 
 // Mirrors world.init(): boot the worker, then hand it its init data (finishLoading runs updateFunction.init).
@@ -638,6 +647,77 @@ describe.each(MODES)('entity-worker-system (%s)', (mode) => {
 
 		// User code throwing must not abort the run: surviving entities still update, and each failure is
 		// logged + surfaced as a `system-error` event on the main thread.
+		describe('queryChanged', () => {
+			it('reports entities joining and leaving a sub-query', async () => {
+				let system = useSystem(new QueryChangedSystem(world, mode));
+				await initSystem(system);
+				let added = record(system, `moving-${QUERY_ADDED_EVENT}`);
+				let removed = record(system, `moving-${QUERY_REMOVED_EVENT}`);
+
+				let entity = createEntity({ maxHealth: 100, speed: 100 });
+				system.run(16);
+				await flush();
+				expect(added).toEqual([[entity.eid]]);
+				expect(removed).toEqual([]);
+
+				entity.removeComponent('movement');
+				system.run(16);
+				await flush();
+				expect(added).toEqual([[entity.eid]]);
+				expect(removed).toEqual([[entity.eid]]);
+			});
+
+			it('is not called for a run where nothing changed', async () => {
+				let system = useSystem(new QueryChangedSystem(world, mode));
+				await initSystem(system);
+				createEntity({ maxHealth: 100, speed: 100 });
+				system.run(16);
+				await flush();
+
+				let added = record(system, `moving-${QUERY_ADDED_EVENT}`);
+				let removed = record(system, `moving-${QUERY_REMOVED_EVENT}`);
+				system.run(16);
+				await flush();
+
+				expect(added).toEqual([]);
+				expect(removed).toEqual([]);
+			});
+
+			it('runs before preRun so worker-local state is current for the run', async () => {
+				let system = useSystem(new QueryChangedSystem(world, mode));
+				await initSystem(system);
+				let tracked = record(system, TRACKED_EVENT);
+
+				let first = createEntity({ maxHealth: 100, speed: 100 });
+				let second = createEntity({ maxHealth: 100, speed: 100 });
+				system.run(16);
+				await flush();
+				world.removeEntity(first);
+				system.run(16);
+				await flush();
+
+				expect(tracked).toEqual([[first.eid, second.eid], [second.eid]]);
+			});
+
+			it('reports a failure with the queryChanged phase and still runs preRun', async () => {
+				let errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+				let system = useSystem(new QueryChangedSystem(world, mode));
+				system.failQueryChanged = true;
+				await initSystem(system);
+				let tracked = record(system, TRACKED_EVENT);
+				let errors: Array<SystemError> = [];
+				world.on('system-error', (error: SystemError) => errors.push(error));
+
+				createEntity({ maxHealth: 100, speed: 100 });
+				system.run(16);
+				await flush();
+
+				expect(errors.map(error => error.phase)).toEqual(['queryChanged']);
+				expect(tracked).toEqual([]);
+				errorSpy.mockRestore();
+			});
+		});
+
 		describe('error handling', () => {
 			let errorSpy: ReturnType<typeof vi.spyOn>;
 			beforeEach(() => {
@@ -806,6 +886,27 @@ class ErrorSystem extends EntityWorkerSystem<Components, { health: Int32Array },
 
 	addDataToWorld(world: ErrorWorld): void {
 		world.failPreRun = this.failPreRun;
+	}
+}
+
+class QueryChangedSystem extends EntityWorkerSystem<Components, { health: Int32Array }, QueryChangedWorld> {
+	failQueryChanged = false;
+
+	constructor(world: TestWorld, mode: Mode) {
+		super(world, {
+			name: 'QueryChangedSystem',
+			required: ['health'],
+			queries: {
+				moving: { required: ['movement'] },
+			},
+			updateFunction: queryChangedUpdate,
+			forceMainThread: mode === 'main-thread',
+			getWorker: () => new Worker(QUERY_CHANGED_WORKER_URL, { type: 'module' }),
+		});
+	}
+
+	addDataToWorld(world: QueryChangedWorld): void {
+		world.failQueryChanged = this.failQueryChanged;
 	}
 }
 

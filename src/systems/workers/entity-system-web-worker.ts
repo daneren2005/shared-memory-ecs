@@ -128,6 +128,18 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 					componentChanges.push({ type: 'remove', entityId, componentName: String(componentName) });
 				},
 			};
+			if(this.updateFunction.queryChanged) {
+				for(const [queryName, delta] of Object.entries(message.queries)) {
+					if(!delta.added.length && !delta.removed.length) {
+						continue;
+					}
+					try {
+						this.updateFunction.queryChanged(message.world, queryName, delta, callbacks);
+					} catch(e) {
+						errors.push({ error: e as Error, phase: 'queryChanged' });
+					}
+				}
+			}
 			let preRunFailed = false;
 			if(this.updateFunction.preRun) {
 				try {

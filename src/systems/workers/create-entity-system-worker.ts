@@ -155,6 +155,18 @@ export default function createEntitySystemWorker<
 					componentChanges.push({ type: 'remove', entityId, componentName: String(componentName) });
 				},
 			};
+			if(updateFunction.queryChanged) {
+				for(const [queryName, delta] of Object.entries(message.queries)) {
+					if(!delta.added.length && !delta.removed.length) {
+						continue;
+					}
+					try {
+						updateFunction.queryChanged(message.world, queryName, delta, callbacks);
+					} catch(err) {
+						errors.push({ error: err as Error, phase: 'queryChanged' });
+					}
+				}
+			}
 			let preRunFailed = false;
 			if(updateFunction.preRun) {
 				try {

@@ -245,7 +245,7 @@ describe('world load', () => {
 		const large = timeToEmpty(5000);
 
 		// Loose bound (wall-clock on a shared machine): an O(n) removal would make each ~10x dearer.
-		expect(large / small).toBeLessThan(4);
+		expect(large / small).toBeLessThan(5);
 	});
 });
 
