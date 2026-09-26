@@ -14,7 +14,8 @@ systems, and domain data.
   config to the raw block values) and `attach(entity, memory, index)` (builds the accessor over that block).
   Loading a component is `attach(entity, memory, memory.create(toBlock(config)))`; splitting it this way lets a
   worker build the block off-thread (it calls only `toBlock`) and the main thread wrap it (`attach`) when it
-  adopts the entity. Plus an optional `save(component)`, `free(component)`, and `died(component, entity, world)`.
+  adopts the entity. `attach` also receives the load config as an optional fourth argument, for main-thread-only
+  state kept off the block (e.g. a display name); it is `undefined` when adopting a worker-built block. Plus an optional `save(component)`, `free(component)`, and `died(component, entity, world)`.
   A component's data splits into `Config` (defining props supplied up front, e.g. `maxHealth`) and
   `Serialization` (runtime-derived state, e.g. current `health`); `toBlock` sees `Config & Serialization` while
   `save` returns only the `Serialization` slice. `free` runs when the component is torn down (see

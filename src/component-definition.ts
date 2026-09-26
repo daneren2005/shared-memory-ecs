@@ -36,7 +36,9 @@ export interface ComponentDefinition<
 	// optional `entity` is passed only on the main thread (never in a worker), for the built-in `entity` component,
 	// which must intern its type string through `entity.world`; a worker-creatable component must not touch it.
 	toBlock(config: Config & Serialization, entity?: BaseEntity): Array<number>
-	attach(entity: BaseEntity, memory: MemoryComponent<T>, index: number): Component
+	// `config` is the same one `toBlock` saw, for main-thread-only state kept off the block (e.g. a display string).
+	// It is undefined when adopting a worker-built block, so such state must have a fallback.
+	attach(entity: BaseEntity, memory: MemoryComponent<T>, index: number, config?: Config & Serialization): Component
 	save?(component: Component): Serialization
 	// Called when the component is torn down (removeComponent, or the entity being removed/killed/cleared)
 	free?(component: Component): void

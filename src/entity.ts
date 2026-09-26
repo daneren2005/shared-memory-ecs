@@ -51,7 +51,7 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 		const definition = (this.world.registry as RegisteredComponentRegistry<C>)[name];
 		const memoryComponent = definition.memoryComponent;
 		const index = memoryComponent.create(definition.toBlock(config, this));
-		const component = definition.attach(this, memoryComponent, index);
+		const component = definition.attach(this, memoryComponent, index, config);
 		// A Component subclass already holds its block; only fetch one for a plain-object accessor that didn't.
 		(component as BaseComponent).block ??= memoryComponent.getBlock(index);
 		(this.components as Partial<C>)[name] = component;

@@ -32,7 +32,43 @@ const shieldDefinition: ComponentDefinition<ShieldComponent, Float32Array, Shiel
 	},
 };
 
+// Keeps a main-thread-only label off the block, read from the config attach receives.
+interface LabelComponent {
+	index: number
+	label: string
+}
+interface LabelConfig {
+	label: string
+}
+const labelDefinition: ComponentDefinition<LabelComponent, Uint32Array, LabelConfig> = {
+	type: Uint32Array,
+	size: 1,
+	loadProperties: ['label'],
+	toBlock() {
+		return [0];
+	},
+	attach(entity, memory, index, config) {
+		return { index, label: config?.label ?? 'unnamed' };
+	},
+};
+
 describe('two-halves component contract (toBlock + attach)', () => {
+	it('passes the load config to attach for state kept off the block', () => {
+		const world = new BaseWorld({ label: labelDefinition });
+		const entity = world.loadEntity({ type: 'ship', label: 'Rocinante' });
+
+		expect(entity.components.label?.label).toEqual('Rocinante');
+	});
+
+	it('passes no config to attach when adopting a worker-built block', () => {
+		const world = new BaseWorld({ label: labelDefinition });
+		const index = world.registry.label.memoryComponent.create([0]);
+
+		const entity = world.adoptEntity({ eid: 999, type: 'ship', components: { label: index } });
+
+		expect(entity.components.label?.label).toEqual('unnamed');
+	});
+
 	it('loadComponent builds a block from toBlock then wraps it with attach', () => {
 		const world = new BaseWorld({ shield: shieldDefinition });
 		const entity = world.loadEntity({ type: 'ship', shield: { strength: 7 } });
