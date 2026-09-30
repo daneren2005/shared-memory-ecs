@@ -687,6 +687,12 @@ the following updates, as above). `await world.clear()` instead tears the world 
 empty, reusable state: it waits for every system's in-flight worker run to finish so nothing is still reading
 the memory, frees the held blocks immediately, and resolves once the world is ready to load into again.
 
+Prefer `world.load()` over looping `world.loadEntity()` for a large batch. It still emits `entity-added` for every
+entity, but systems ignore those while `world.isBulkLoading` is set and instead join the whole batch once at the end
+through `system.addEntities(batch)`. Entities with the same component keys are grouped, so each query's component
+test runs once per group instead of once per entity; system membership keeps load order. A system that overrides
+`checkAddEntity` (or an `EntityWorkerSystem` that overrides `matchesQuery`) still has it called for each entity.
+
 ## Measuring performance
 
 `PerformanceTiming` watches a world and reports what running it costs. Hand it the world and it hooks itself

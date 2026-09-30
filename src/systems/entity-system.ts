@@ -2,6 +2,7 @@ import type BaseWorld from '../world';
 import type BaseEntity from '../entity';
 import type { ComponentDefinitionMap, ComponentMap } from '../component-definition';
 import IterableSystem, { type IterableSystemConfig } from './iterable-system';
+import { forEachInMatchingGroups, type EntityBatch } from './system';
 
 // Iterates the entities owning a given set of components on the main thread; membership tracks world events.
 export default abstract class EntitySystem<C extends ComponentMap, T extends BaseEntity<C> = BaseEntity<C>> extends IterableSystem<C, T> {
@@ -20,8 +21,8 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 		this.options = options;
 
 		world.on('entity-added', (entity: BaseEntity<C>) => {
-			if(this.checkAddEntity(entity) && this.options.updateEntityOnAdd) {
-				this.updateEntity(entity as T, 0);
+			if(!world.isBulkLoading) {
+				this.onEntityAdded(entity);
 			}
 		});
 		world.on('entity-removed', (entity: BaseEntity<C>) => {
@@ -62,8 +63,33 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 	}
 	abstract updateEntity(entity: T, elapsedTime: number): void;
 
+	private onEntityAdded(entity: BaseEntity<C>) {
+		if(this.checkAddEntity(entity) && this.options.updateEntityOnAdd) {
+			this.updateEntity(entity as T, 0);
+		}
+	}
+	addEntities(batch: EntityBatch<C>): void {
+		// A subclass with its own membership rule gets it applied per entity, exactly as entity-added would.
+		if(this.checkAddEntity !== EntitySystem.prototype.checkAddEntity) {
+			batch.entities.forEach(entity => this.onEntityAdded(entity));
+			return;
+		}
+
+		forEachInMatchingGroups(batch, entity => this.hasComponents(entity), entity => {
+			if(this.filterEntity(entity)) {
+				this.entities.set(entity.eid, entity as T);
+				if(this.options.updateEntityOnAdd) {
+					this.updateEntity(entity as T, 0);
+				}
+			}
+		});
+	}
+	private hasComponents(entity: BaseEntity<C>): boolean {
+		return !this.options.components || this.options.components.every(component => !!entity.components[component]);
+	}
+
 	checkAddEntity(entity: BaseEntity<C>): boolean {
-		if(this.options.components && this.options.components.filter(component => !!entity.components[component]).length !== this.options.components.length) {
+		if(!this.hasComponents(entity)) {
 			return false;
 		}
 

@@ -49,7 +49,7 @@ export type {
 } from './component-definition';
 
 export { default as System } from './systems/system';
-export type { SystemConfig, SystemError, SystemErrorPhase } from './systems/system';
+export type { EntityBatch, SystemConfig, SystemError, SystemErrorPhase } from './systems/system';
 export { default as IterableSystem } from './systems/iterable-system';
 export type { IterableSystemConfig } from './systems/iterable-system';
 export { default as EntitySystem } from './systems/entity-system';

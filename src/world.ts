@@ -9,6 +9,7 @@ import MemoryComponent from './memory-component';
 import ConstantStringCache from './constant-string-cache';
 import type BaseEntity from './entity';
 import type System from './systems/system';
+import type { EntityBatch } from './systems/system';
 import EntitySystem from './systems/entity-system';
 import EntityWorkerSystem from './systems/entity-worker-system';
 import type { WorkerCreatedEntity } from './systems/entity-worker-system';
@@ -85,6 +86,8 @@ export default class BaseWorld<
 	destroyed = false;
 	// True while the world has never been loaded into
 	pristine = true;
+	// True while load() adds its batch: systems ignore per-entity events and are handed every entity at the end.
+	isBulkLoading = false;
 
 	// Two rolling buffers of component blocks awaiting a safe free. New deferrals land in `next`; `active` is the
 	// one currently waiting for its systems to each finish a run before its blocks can be reused
@@ -240,14 +243,23 @@ export default class BaseWorld<
 			this.constantStrings.getOrCreate(entityClass);
 		}
 
-		const entities = config.entities.map(entityConfig => this.loadEntity(entityConfig, false));
-		for(let entity of entities) {
-			entity.finishLoading();
-			this.emit('entity-added', entity);
-			entity.on('death', () => {
-				this.onEntityDied(entity);
-			});
+		this.isBulkLoading = true;
+		try {
+			const entities = config.entities.map(entityConfig => this.loadEntity(entityConfig, false));
+			for(let entity of entities) {
+				entity.finishLoading();
+				this.emit('entity-added', entity);
+				entity.on('death', () => {
+					this.onEntityDied(entity);
+				});
+			}
+		} finally {
+			this.isBulkLoading = false;
 		}
+		// Read back from the world rather than the batch, so entities created or removed by listeners mid-load are
+		// reflected. The world was empty beforehand, so no system holds any of these yet.
+		const batch = batchByComponents(this.entities.values());
+		this.systems.forEach(system => system.addEntities(batch));
 
 		this.gameTime = config.gameTime ?? 0;
 		this.playerTime = config.playerTime ?? 0;
@@ -487,6 +499,9 @@ export default class BaseWorld<
 	}
 
 	addEntityToEntityWorkerSystem(entity: BaseEntity<C>, component: keyof C) {
+		if(this.isBulkLoading) {
+			return;
+		}
 		this.systems.forEach(system => {
 			if(system instanceof EntitySystem && system.options.components?.includes(component)) {
 				system.checkAddEntity(entity);
@@ -498,6 +513,9 @@ export default class BaseWorld<
 		});
 	}
 	removeEntityFromEntityWorkerSystem(entity: BaseEntity<C>, component: keyof C) {
+		if(this.isBulkLoading) {
+			return;
+		}
 		this.systems.forEach(system => {
 			if(system instanceof EntitySystem && system.options.components?.includes(component)) {
 				system.removeEntity(entity);
@@ -531,4 +549,21 @@ export default class BaseWorld<
 		});
 		this.destroyed = true;
 	}
+}
+
+// Removed components are deleted from the bag, so the key list alone identifies the component set.
+function batchByComponents<C extends ComponentMap>(entities: Iterable<BaseEntity<C>>): EntityBatch<C> {
+	const batch: EntityBatch<C> = { entities: [], groupIndexes: [], groups: [] };
+	const groupIndexByKey = new Map<string, number>();
+	for(let entity of entities) {
+		const key = Object.keys(entity.components).sort().join(',');
+		let groupIndex = groupIndexByKey.get(key);
+		if(groupIndex === undefined) {
+			groupIndex = batch.groups.push(entity) - 1;
+			groupIndexByKey.set(key, groupIndex);
+		}
+		batch.entities.push(entity);
+		batch.groupIndexes.push(groupIndex);
+	}
+	return batch;
 }

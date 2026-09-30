@@ -221,6 +221,17 @@ describe('entity classes', () => {
 		expect(() => item.loadComponent('vitality', { vitality: 2 })).toThrow('not allowed for entity type token');
 	});
 
+	it('allows a property shared with a disallowed component across repeated loads of each class', () => {
+		const world = createWorld();
+
+		for(let i = 0; i < 3; i++) {
+			// `value` also triggers auditedValue, which item does not allow, and value, which actor does not allow.
+			expect(world.loadEntity({ type: 'token', value: i }).components.value?.value).toBe(i);
+			expect(world.loadEntity({ type: 'guardian', value: i }).components.auditedValue).toBeDefined();
+			expect(() => world.loadEntity({ type: 'token', vitality: i })).toThrow('cannot load component vitality from property vitality');
+		}
+	});
+
 	it('saves type without class and re-derives the same class on reload', () => {
 		const world = createWorld();
 		const entity = world.loadEntity({ type: 'token' });

@@ -1,5 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import type BaseWorld from '../world';
+import type BaseEntity from '../entity';
 import type { ComponentDefinitionMap, ComponentMap } from '../component-definition';
 
 // Base system: runs on an optional fixed timestep (deltaBetweenRuns), driven by BaseWorld#update.
@@ -27,6 +28,8 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 	}
 	// Called once the world's entities all exist: the point a system hands its startup data off (see EntityWorkerSystem).
 	finishLoading(): void | Promise<void> {}
+	// world.load() joins its whole batch here instead of one entity-added at a time.
+	addEntities(batch: EntityBatch<C>): void {}
 
 	update(elapsedTime: number): boolean {
 		this.currentDelta += elapsedTime;
@@ -78,6 +81,26 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 
 	destroy() {
 		this.removeAllListeners();
+	}
+}
+
+// A load batch in load order. Entities with identical component keys share a group, so a query's component test is
+// answered once per group rather than once per entity.
+export interface EntityBatch<C extends ComponentMap = ComponentMap> {
+	entities: Array<BaseEntity<C>>
+	// Per entity, its index into `groups`.
+	groupIndexes: Array<number>
+	// One representative entity per distinct component-key set.
+	groups: Array<BaseEntity<C>>
+}
+
+// Visits, in load order, each entity whose group passes `matchesGroup`.
+export function forEachInMatchingGroups<C extends ComponentMap>(batch: EntityBatch<C>, matchesGroup: (representative: BaseEntity<C>) => boolean, callback: (entity: BaseEntity<C>) => void) {
+	const matches = batch.groups.map(matchesGroup);
+	for(let i = 0; i < batch.entities.length; i++) {
+		if(matches[batch.groupIndexes[i]]) {
+			callback(batch.entities[i]);
+		}
 	}
 }
 

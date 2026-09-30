@@ -13,6 +13,7 @@ export default class EntityFactory<
 	configs: { [type: string]: Cfg };
 	classes: EntityClassRegistry;
 	private allowedComponents = new Map<string, ReadonlySet<string>>();
+	private forbiddenProperties = new Map<string, ReadonlySet<string>>();
 
 	constructor(configs: { [type: string]: Cfg } = {}, classes: EntityClassRegistry = {}) {
 		this.configs = configs;
@@ -31,6 +32,7 @@ export default class EntityFactory<
 
 	setWorld(world: BaseWorld<ComponentDefinitionMap, C, Cfg, E>): void {
 		this.world = world;
+		this.forbiddenProperties.clear();
 		for(const name of Object.keys(this.classes)) {
 			const constructor = this.classes[name].entity;
 			if(constructor !== BaseEntity && !(constructor.prototype instanceof BaseEntity)) {
@@ -69,7 +71,8 @@ export default class EntityFactory<
 	loadEntity(config: Cfg, created = true): E {
 		const requestedType = (config as { type?: string }).type;
 		const merged = this.getConfig(config);
-		if(this.hasClasses && requestedType) {
+		// The base getConfig already validated; only an override can have changed the result since.
+		if(this.hasClasses && requestedType && this.getConfig !== EntityFactory.prototype.getConfig) {
 			this.validateResolvedConfig(requestedType, merged);
 		}
 		const definition = this.getClassDefinition(merged);
@@ -165,6 +168,43 @@ export default class EntityFactory<
 		}
 	}
 	private validateComponentTriggers(type: string, entityClass: string, config: Cfg): void {
+		const forbidden = this.getForbiddenProperties(entityClass);
+		for(const prop in config as Record<string, unknown>) {
+			if(forbidden.has(prop)) {
+				this.throwComponentTriggerError(type, entityClass, config);
+			}
+		}
+	}
+	// Per class: every property that would load a component outside its allowlist. Loads check each config key
+	// against this instead of rescanning the registry.
+	private getForbiddenProperties(entityClass: string): ReadonlySet<string> {
+		let forbidden = this.forbiddenProperties.get(entityClass);
+		if(!forbidden) {
+			const allowed = this.allowedComponents.get(entityClass)!;
+			const allowedProperties = new Set<string>();
+			for(const component of allowed) {
+				for(const prop of this.world.registry[component as keyof C].loadProperties) {
+					allowedProperties.add(prop);
+				}
+			}
+			const props = new Set<string>();
+			for(const name of Object.keys(this.world.registry)) {
+				if(name === 'entity' || allowed.has(name)) {
+					continue;
+				}
+				for(const prop of this.world.registry[name as keyof C].loadProperties) {
+					if(!allowedProperties.has(prop)) {
+						props.add(prop);
+					}
+				}
+			}
+			forbidden = props;
+			this.forbiddenProperties.set(entityClass, forbidden);
+		}
+		return forbidden;
+	}
+	// The original registry-order scan, kept for the failure path so the error names the same component as before.
+	private throwComponentTriggerError(type: string, entityClass: string, config: Cfg): never {
 		const allowed = this.allowedComponents.get(entityClass)!;
 		const allowedProperties = new Set<string>();
 		for(const component of allowed) {
@@ -183,5 +223,6 @@ export default class EntityFactory<
 				throw new Error(`Entity type ${type} class ${entityClass} cannot load component ${name} from property ${forbidden}`);
 			}
 		}
+		throw new Error(`Entity type ${type} class ${entityClass} loads a component outside its class`);
 	}
 }

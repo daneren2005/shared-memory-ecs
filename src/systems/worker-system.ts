@@ -1,5 +1,4 @@
 import type BaseWorld from '../world';
-import type BaseEntity from '../entity';
 import type { ComponentDefinitionMap, ComponentMap } from '../component-definition';
 import type { SystemConfig } from './system';
 import EntityWorkerSystem, {
@@ -25,14 +24,8 @@ export default class WorkerSystem<
 		});
 	}
 
-	// Never populate the main query — an empty `required` would otherwise match every entity. Sub-query membership
-	// is maintained as usual so the run function still sees it.
-	checkAddEntity(entity: BaseEntity<C>): boolean {
-		Object.entries(this.options.queries ?? {}).forEach(([queryName, query]) => {
-			const queryList = this.queryEntities[queryName] ?? (this.queryEntities[queryName] = new Map());
-			this.updateEntityList(queryName, queryList, entity, this.matchesQuery(entity, query));
-		});
-
+	// Sub-query membership is maintained as usual so the run function still sees it.
+	protected get tracksMainQuery(): boolean {
 		return false;
 	}
 

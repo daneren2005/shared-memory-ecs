@@ -4,7 +4,7 @@ import type BaseWorld from '../world';
 import type BaseEntity from '../entity';
 import type { BaseComponent, ComponentDefinitionMap, ComponentMap } from '../component-definition';
 import type { ComponentTypedArray } from '../memory-component';
-import System, { type SystemConfig } from './system';
+import System, { forEachInMatchingGroups, type EntityBatch, type SystemConfig } from './system';
 import type EntitySystemWorkerMessage from './workers/entity-system-worker-message';
 import EntitySystemWebWorker from './workers/entity-system-web-worker';
 
@@ -47,7 +47,9 @@ export default abstract class EntityWorkerSystem<
 		});
 
 		world.on('entity-added', (entity: BaseEntity<C>) => {
-			this.checkAddEntity(entity);
+			if(!world.isBulkLoading) {
+				this.checkAddEntity(entity);
+			}
 		});
 		world.on('entity-removed', (entity: BaseEntity<C>) => {
 			this.removeEntity(entity);
@@ -309,14 +311,20 @@ export default abstract class EntityWorkerSystem<
 		if(entity.components.entity.dead) {
 			return false;
 		}
+		if(!this.matchesComponents(entity, query)) {
+			return false;
+		}
+		if(query.filter && !query.filter(entity)) {
+			return false;
+		}
 
+		return true;
+	}
+	private matchesComponents(entity: BaseEntity<C>, query: EntityWorkerSystemQuery<C>): boolean {
 		if(query.required.find(component => !entity.components[component])) {
 			return false;
 		}
 		if(query.not?.find(component => !!entity.components[component])) {
-			return false;
-		}
-		if(query.filter && !query.filter(entity)) {
 			return false;
 		}
 
@@ -352,8 +360,13 @@ export default abstract class EntityWorkerSystem<
 		}
 	}
 
+	// WorkerSystem has no main query: its empty `required` would otherwise match every entity.
+	protected get tracksMainQuery(): boolean {
+		return true;
+	}
+
 	checkAddEntity(entity: BaseEntity<C>): boolean {
-		const shouldAddToMain = this.matchesQuery(entity, this.options);
+		const shouldAddToMain = this.tracksMainQuery && this.matchesQuery(entity, this.options);
 		this.updateEntityList(MAIN_QUERY_NAME, this.entities, entity, shouldAddToMain);
 
 		Object.entries(this.options.queries ?? {}).forEach(([queryName, query]) => {
@@ -363,6 +376,32 @@ export default abstract class EntityWorkerSystem<
 
 		return shouldAddToMain;
 	}
+	addEntities(batch: EntityBatch<C>): void {
+		// A subclass with its own membership rule gets it applied per entity, exactly as entity-added would.
+		if(this.checkAddEntity !== EntityWorkerSystem.prototype.checkAddEntity || this.matchesQuery !== EntityWorkerSystem.prototype.matchesQuery) {
+			batch.entities.forEach(entity => this.checkAddEntity(entity));
+			return;
+		}
+
+		if(this.tracksMainQuery) {
+			this.addBatchToQuery(MAIN_QUERY_NAME, this.entities, this.options, batch);
+		}
+		Object.entries(this.options.queries ?? {}).forEach(([queryName, query]) => {
+			const queryList = this.queryEntities[queryName] ?? (this.queryEntities[queryName] = new Map());
+			this.addBatchToQuery(queryName, queryList, query, batch);
+		});
+	}
+	private addBatchToQuery(queryName: string, list: Map<number, BaseEntity<C>>, query: EntityWorkerSystemQuery<C>, batch: EntityBatch<C>) {
+		const delta = this.getQueryDelta(queryName);
+		forEachInMatchingGroups(batch, entity => this.matchesComponents(entity, query), entity => {
+			if(entity.components.entity.dead || (query.filter && !query.filter(entity))) {
+				return;
+			}
+			list.set(entity.eid, entity);
+			this.markAdded(delta, entity);
+		});
+	}
+
 	removeEntity(entity: BaseEntity<C>) {
 		this.updateEntityList(MAIN_QUERY_NAME, this.entities, entity, false);
 		Object.entries(this.queryEntities).forEach(([queryName, list]) => {
