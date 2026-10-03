@@ -26,6 +26,7 @@ export interface PerformanceStats {
 
 export interface PerformanceTimingOptions {
 	ticksBetweenUpdates?: number
+	autoUpdate?: boolean
 }
 
 interface SystemTiming {
@@ -77,6 +78,7 @@ export default class PerformanceTiming<C extends ComponentMap = ComponentMap> ex
 		events: { ...EMPTY_TIMING },
 	};
 
+	private readonly autoUpdate: boolean;
 	private ticks = 0;
 	private updateStart = 0;
 	private updateTimes: Array<number> = [];
@@ -87,6 +89,7 @@ export default class PerformanceTiming<C extends ComponentMap = ComponentMap> ex
 		super();
 
 		this.world = world;
+		this.autoUpdate = options.autoUpdate ?? true;
 		this.ticksBetweenUpdates = options.ticksBetweenUpdates ?? DEFAULT_TICKS_BETWEEN_UPDATES;
 
 		world.on('update-started', this.onUpdateStarted);
@@ -141,8 +144,8 @@ export default class PerformanceTiming<C extends ComponentMap = ComponentMap> ex
 		this.updateTimes.push(performance.now() - this.updateStart);
 
 		this.ticks += elapsedTime;
-		if(this.ticks >= this.ticksBetweenUpdates) {
-			this.recalculate();
+		if(this.autoUpdate && this.ticks >= this.ticksBetweenUpdates) {
+			this.flush();
 		}
 	};
 
@@ -195,7 +198,11 @@ export default class PerformanceTiming<C extends ComponentMap = ComponentMap> ex
 		this.systemTimings.delete(name);
 	}
 
-	private recalculate() {
+	flush(): PerformanceStats {
+		if(this.destroyed) {
+			return this.stats;
+		}
+
 		const systems = this.world.systems.map(system => {
 			const timing = this.systemTimings.get(system.name);
 			return {
@@ -227,5 +234,6 @@ export default class PerformanceTiming<C extends ComponentMap = ComponentMap> ex
 		});
 
 		this.emit('stats-updated', this.stats);
+		return this.stats;
 	}
 }

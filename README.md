@@ -721,6 +721,12 @@ Every entry is an `{ avg, min, max, samples }` over the window just closed:
   than on a frame boundary, so there is no per-frame combined sample to take; these are the per-system figures
   summed at the end of the window, giving what a run of every system costs the main thread between them.
 
+To coordinate reporting with an external clock, construct with `{ autoUpdate: false }` and call
+`timing.flush()` at each reporting boundary. It publishes and returns a snapshot of all collected update,
+worker, and event samples, then starts a fresh window. This also works while paused: windows without work
+report zeroes. Worker results belong to the window in which they arrive. Automatic reporting remains
+enabled by default.
+
 `getSystemStats(name)` pulls one system out of the latest snapshot, `reset()` throws away everything collected
 so far (worth doing after loading a new scene, when the samples either side are not comparable), and
 `destroy()` unhooks it from the world.

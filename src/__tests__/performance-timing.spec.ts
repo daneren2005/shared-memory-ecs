@@ -15,6 +15,49 @@ afterEach(() => {
 });
 
 describe('performance timing', () => {
+	it('flushes every timing on an external reporting boundary, including while paused', () => {
+		const world = createTestWorld();
+		world.addSystem(new NoopSystem(world, 'first'));
+		const timing = new PerformanceTiming(world, { autoUpdate: false });
+		const updated = vi.fn<(stats: PerformanceStats) => void>();
+		timing.on('stats-updated', updated);
+
+		clock = [0, 2, 0, 6];
+		world.update(1_000);
+		world.update(1_000);
+		emitRun(world, 'first', 7, 3);
+		expect(updated).not.toHaveBeenCalled();
+		expect(timing.stats.update.samples).toBe(0);
+
+		const first = timing.flush();
+		expect(first).toBe(timing.stats);
+		expect(first.update).toEqual({ avg: 4, min: 2, max: 6, samples: 2 });
+		expect(first.systems[0].run.max).toBe(7);
+		expect(first.systems[0].events.max).toBe(3);
+		expect(first.events.max).toBe(3);
+		expect(updated).toHaveBeenCalledExactlyOnceWith(first);
+
+		world.pause();
+		world.update(1_000);
+		const paused = timing.flush();
+		expect(paused.update).toEqual({ avg: 0, min: 0, max: 0, samples: 0 });
+		expect(paused.systems[0].run.samples).toBe(0);
+		expect(paused.events.samples).toBe(0);
+		expect(updated).toHaveBeenCalledTimes(2);
+		expect(first.update.max).toBe(6);
+	});
+
+	it('does not publish a manual snapshot after destruction', () => {
+		const world = createTestWorld();
+		const timing = new PerformanceTiming(world, { autoUpdate: false });
+		const updated = vi.fn<(stats: PerformanceStats) => void>();
+		timing.on('stats-updated', updated);
+		const previous = timing.stats;
+		timing.destroy();
+		expect(timing.flush()).toBe(previous);
+		expect(updated).not.toHaveBeenCalled();
+	});
+
 	it('collects update times and reports them once the window elapses', () => {
 		let world = createTestWorld();
 		let timing = new PerformanceTiming(world);
