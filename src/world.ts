@@ -19,6 +19,8 @@ import type {
 } from './component-definition';
 import { entityDefinition, type EntityComponent } from './entity-component';
 import EntityFactory from './entity-factory';
+import DefaultScheduler from './scheduling/default-scheduler';
+import type { Scheduler, SchedulerUpdateResult } from './scheduling/scheduler';
 
 const DEFAULT_HEAP_SIZE = MAX_BYTE_OFFSET_LENGTH;
 const FREE_BUFFER_STUCK_MS = 10000;
@@ -43,6 +45,7 @@ export interface WorldOptions<
 > {
 	heapSize?: number
 	factory?: EntityFactory<C, Cfg, E>
+	scheduler?: Scheduler<C>
 }
 
 export interface WorldConfig<Cfg = any> {
@@ -77,6 +80,7 @@ export default class BaseWorld<
 	// time while still iterating in insertion order, preserving load/save order.
 	entities: Map<number, E> = new Map();
 	systems: Array<System<C>> = [];
+	readonly scheduler: Scheduler<C>;
 
 	gameTime = 0;
 	// Keeps advancing while paused and is never scaled by timeScale (unlike gameTime).
@@ -98,6 +102,7 @@ export default class BaseWorld<
 	constructor(registry: R, options: WorldOptions<C, Cfg, E> = {}) {
 		super();
 
+		this.scheduler = options.scheduler ?? new DefaultScheduler<C>();
 		this.heap = new MemoryHeap({ bufferSize: options.heapSize ?? DEFAULT_HEAP_SIZE });
 		this.constantStrings = new ConstantStringCache(this.heap);
 		this.eidCounter = this.heap.allocUI32(1);
@@ -231,6 +236,7 @@ export default class BaseWorld<
 				this.removeEntity(entity);
 			}
 			this.systems.forEach(system => system.clear());
+			this.scheduler.reset?.(this);
 			this.consolidateFreeBuffersForReload();
 		}
 
@@ -284,6 +290,7 @@ export default class BaseWorld<
 			this.removeEntity(entity);
 		}
 		this.systems.forEach(system => system.clear());
+		this.scheduler.reset?.(this);
 		this.freeAllPendingBuffers();
 
 		this.pristine = true;
@@ -341,6 +348,7 @@ export default class BaseWorld<
 		if(this.activeFreeBuffer.waitingSystems.delete(system) && this.activeFreeBuffer.waitingSystems.size === 0) {
 			this.processFreeBuffers();
 		}
+		this.scheduler.runCompleted?.(this, system);
 	}
 	private processFreeBuffers() {
 		// Loop so a promoted buffer with no systems to wait for is freed the same tick rather than a frame later.
@@ -415,6 +423,7 @@ export default class BaseWorld<
 
 	addSystem<T extends System<C>>(system: T): T {
 		this.systems.push(system);
+		this.scheduler.systemAdded?.(this, system);
 		this.emit('system-added', system);
 		return system;
 	}
@@ -422,6 +431,7 @@ export default class BaseWorld<
 		let index = this.systems.findIndex(otherSystem => system.name === otherSystem.name);
 		if(index === -1) {
 			this.systems.push(system);
+			this.scheduler.systemAdded?.(this, system);
 			this.emit('system-added', system);
 		}
 	}
@@ -429,18 +439,19 @@ export default class BaseWorld<
 		let index = this.systems.findIndex(system => system.name === name);
 		if(index !== -1) {
 			const [system] = this.systems.splice(index, 1);
+			this.scheduler.systemRemoved?.(this, system);
 			this.emit('system-removed', system);
 		}
 	}
 
-	update(elapsedTime: number): { lastSystemError?: Error | null } {
+	update(elapsedTime: number): SchedulerUpdateResult {
 		this.emit('update-started', elapsedTime);
 		const result = this.runUpdate(elapsedTime);
 		this.emit('update-finished', elapsedTime);
 
 		return result;
 	}
-	private runUpdate(elapsedTime: number): { lastSystemError?: Error | null } {
+	private runUpdate(elapsedTime: number): SchedulerUpdateResult {
 		this.playerTime += elapsedTime;
 		if(this.paused) {
 			return {};
@@ -460,36 +471,11 @@ export default class BaseWorld<
 			this.heap.ensureSpareBuffer();
 		}
 
-		let lastSystemError: Error | null = null;
-		this.systems.forEach(system => {
-			let shouldRun = true;
-			let ran = false;
-			let failed = false;
-			this.emit(`system-${system.name}-started`);
-			try {
-				shouldRun = system.shouldRun();
-				if(shouldRun) {
-					ran = system.update(elapsedTime);
-				}
-			} catch(e) {
-				const error = e as Error;
-				console.error(error.message, error);
-				failed = true;
-				lastSystemError = error;
-				this.emit('system-error', { system: system.name, error, phase: 'run' });
-			}
-			this.emit(`system-${system.name}-finished`, {
-				ran,
-				shouldRun,
-				failed,
-			});
-		});
+		const result = this.scheduler.update(this, elapsedTime);
 
 		this.checkFreeBufferTimeout(unscaledElapsedTime);
 
-		return {
-			lastSystemError,
-		};
+		return result;
 	}
 	pause() {
 		this.paused = true;
@@ -547,6 +533,7 @@ export default class BaseWorld<
 		this.systems.forEach(system => {
 			system.destroy();
 		});
+		this.scheduler.destroy?.(this);
 		this.destroyed = true;
 	}
 }

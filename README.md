@@ -193,6 +193,44 @@ template.
 
 Classless factories keep the original behavior: they create `BaseEntity` and scan the complete registry.
 
+## System scheduling
+
+`world.update(elapsedTime)` uses `DefaultScheduler` to dispatch systems in registration order.
+Synchronous systems run immediately, workers can overlap after dispatch, and iterable systems can
+continue across updates. Systems keep their existing `shouldRun()`, `deltaBetweenRuns`, and `firstRun`
+behavior. The world advances clocks, applies `timeScale`, skips dispatch while paused, prepares shared
+memory, and manages deferred component frees.
+
+Select a scheduler at construction; `world.scheduler` is readonly:
+
+```ts
+import { BaseWorld, DefaultScheduler } from '@daneren2005/shared-memory-ecs';
+
+const world = new BaseWorld(registry, {
+	scheduler: new DefaultScheduler<Components>()
+});
+world.update(16); // Synchronous result: { lastSystemError: null } when no dispatch error occurred.
+```
+
+Custom policies implement `Scheduler<C>`. Its synchronous `update(context, elapsedTime)` receives the
+scaled delta and a `SchedulerContext<C>` exposing the live `systems` array and the world's `emit` method.
+It returns `SchedulerUpdateResult` (`{ lastSystemError?: Error | null }`). `DefaultScheduler` preserves
+the existing dispatch timing events, error reporting, and continuation after a system throws.
+
+Optional `systemAdded(context, system)` and `systemRemoved(context, system)` hooks receive notifications
+after the array changes and before the corresponding world event. Duplicate names remain supported;
+`addSystemIfNotExists` checks names and `removeSystem` removes the first matching name. Direct assignment
+or mutation of `world.systems` bypasses membership hooks, so policies must read the live array when needed.
+The default policy preserves native `forEach` mutation behavior during dispatch.
+
+Optional `reset(context)` runs after systems are cleared during reload or non-pristine `clear()`;
+pristine worlds skip that teardown. `destroy(context)` runs once after system destruction.
+`runCompleted(context, system)` receives the existing completion boundary: a synchronous run returned,
+an iterable queue drained, or a current-generation worker reply's effects were applied. Fallback
+completion can arrive inside scheduler dispatch. The world processes eligible deferred frees before
+calling this hook. Dispatch return values and `system-<name>-finished` events do not imply completion.
+These hooks expose lifecycle notifications; they do not establish deterministic ticks or safe edit barriers.
+
 ## Iterating entities
 
 `world.entities` is a `Map` keyed by `eid`, not an array, and so is `entities` on `EntitySystem` and

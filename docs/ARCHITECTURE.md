@@ -28,7 +28,7 @@ Run type-check and lint after every edit (AGENTS.md).
 | --- | --- |
 | `index.ts` | Public barrel (main-thread entry). |
 | `worker.ts` | `/worker` subpath barrel — only what runs in a worker, keeps worker bundles tiny. |
-| `world.ts` | `BaseWorld<R,C,Cfg,E>`: owns the heap, constant strings, registry pools, atomic eid counter, typed entity Map, systems, clocks, lifecycle, and deferred frees. `E` defaults to `BaseEntity<C,Cfg>` and can be a registered wrapper union. `adoptEntity()` validates a worker descriptor, asks the factory for its class wrapper, attaches its blocks, and queues cleanup on failure. Buffer-growth events keep worker heaps synchronized. |
+| `world.ts` | `BaseWorld<R,C,Cfg,E>`: owns the heap, constant strings, registry pools, atomic eid counter, typed entity Map, systems, clocks, lifecycle, and deferred frees. Selects a readonly scheduler at construction and delegates dispatch after preparing memory. `E` defaults to `BaseEntity<C,Cfg>` and can be a registered wrapper union. `adoptEntity()` validates a worker descriptor, asks the factory for its class wrapper, attaches its blocks, and queues cleanup on failure. Buffer-growth events keep worker heaps synchronized. |
 | `entity.ts` | `BaseEntity<C,Cfg>`: immutable eid plus `id`/`type`/`dead` accessors and a component bag; load/save/deferred load, component attach/remove/mutation, and teardown. A factory class wrapper supplies a shared allowed-component set; normal load, deferred load, direct attachment, and worker adoption enforce it. Attached components cache their block views, and teardown defers block/free-hook work safely. |
 | `entity-component.ts` | The always-present four-slot `entity` component (`dead`, `isStatic`, immutable `type`, immutable `class`), all worker-visible. Type and class are pointers to interned `ConstantString`s. Exports `DEAD_INDEX`, `STATIC_INDEX`, `TYPE_INDEX`, `CLASS_INDEX`, and `entityDefinition`. Save persists type; class is recovered from that type's template. |
 | `constant-string-cache.ts` | `ConstantStringCache`: interns immutable strings (from `@daneren2005/shared-memory-objects`'s `ConstantString`) in the heap and resolves a stored pointer back to its string. `getOrCreate(value)` dedupes so identical values share one allocation; `getString(pointer)` is a Map hit before rebuilding from memory. The main thread creates+interns (`world.constantStrings`); each worker reconstructs its own cache over the same buffers to resolve pointers. |
@@ -51,6 +51,13 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
 | `entity-system.ts` | `EntitySystem<C,T>`: main-thread iteration over entities owning `options.components`; auto add/remove via world events; `entities` Map by eid; `filterEntity` skips static. A sliced multi-frame run remains runnable until its queue drains, and revalidates each queued entity against current membership before updating it. |
 | `entity-worker-system.ts` | `EntityWorkerSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks, and the update-function hooks (`init`/`queryChanged`/`preRun`/`entityRemoved`; `queryChanged` receives each changed sub-query's delta before `preRun`). The largest / most involved file. |
 | `worker-system.ts` | `WorkerSystem<C,W,D>`: an `EntityWorkerSystem` that calls its function **once per run** over the named sub-queries instead of once per entity. It has **no main query** (`required` is forced `[]` and `tracksMainQuery` is false, so `this.entities` is never populated), and `shouldRun()` is always `true` so the `deltaBetweenRuns` cadence drives one run per interval even with zero entities. Reuses the whole EntityWorkerSystem worker/query/`createsEntities`/`addDataToWorld` machinery: the single run function `(world, queries, callbacks)` is wrapped as the update function's `preRun` (per-entity body a no-op) by `toEntityUpdateFunction`. Fresh per-run data is the existing `addDataToWorld(world)` channel (structured-cloned each run, so plain/cloneable). |
+
+### Scheduling (`src/scheduling/`)
+
+| File | Responsibility |
+| --- | --- |
+| `scheduler.ts` | Public `Scheduler<C>`, `SchedulerContext<C>` (live system array + world `emit`), and `SchedulerUpdateResult` contracts. Synchronous `update` gets the scaled delta. Optional membership/reset/destroy/completion hooks expose existing lifecycle boundaries without run identities or edit barriers. The world itself satisfies the context, avoiding a per-update wrapper and stale system-array snapshots. |
+| `default-scheduler.ts` | `DefaultScheduler<C>`: the original registration-order `forEach` dispatch loop, including `shouldRun`, dispatch timing events, coarse error handling, and `lastSystemError`. No schedule cache, promises, graph work, or run-tracking allocations. Systems still own cadence, worker dispatch, and iterable continuation. |
 
 ### Workers (`src/systems/workers/`) and actions (`src/actions/`)
 
@@ -86,8 +93,17 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
 - **Save:** `entity.save()` merges each component's `save()` (Serialization slice only;
   Config comes back from the factory template) → flat `Cfg`. `world` config is
   `{ entities: Cfg[], gameTime?, playerTime?, timeScale? }`.
-- **Update:** `world.update(dt)` → `update-started` → per system `shouldRun`/`update`
-  (timeScale-scaled, skipped while paused) → `update-finished`.
+- **Update:** `world.update(dt)` → `update-started` → advance player clock → pause gate → scale delta and
+  advance game clock → deferred-free promotion + spare-buffer preparation → `scheduler.update(world, dt)` →
+  deferred-free timeout check → `update-finished`. The default scheduler dispatches each system's
+  `shouldRun`/`update` in registration order. Workers can overlap after dispatch; iterable runs can span updates.
+- **Scheduler lifecycle:** `WorldOptions.scheduler` selects an instance (default `DefaultScheduler`), exposed
+  readonly on the world. Add/remove hooks run after array mutation and before world membership events; direct
+  array edits bypass hooks. Reload/non-pristine clear calls `reset` after system clears; destroy calls its hook
+  after destroying systems. `notifySystemRunCompleted` retains the existing free-buffer handling, then calls
+  `scheduler.runCompleted`: synchronous return, sliced queue drained, or current-generation worker effects
+  applied. Fallback completion can be reentrant during dispatch. Dispatch timing events and PerformanceTiming
+  retain their existing meaning; no new completion events or run identities are introduced in this extraction.
 - **Error handling:** user code (an update body, `queryChanged`, `preRun`, `entityRemoved`, an `EntitySystem`'s `updateEntity` /
   `beforeRunIterables`) never aborts a whole run when it throws. Each is wrapped in try/catch: a per-entity failure
   is logged and the run continues with the next entity; a `preRun`/`beforeRunIterables` failure skips that run's
