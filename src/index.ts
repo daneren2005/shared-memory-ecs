@@ -1,7 +1,9 @@
 export { default as BaseWorld } from './world';
 export type { WorldOptions, WorldConfig } from './world';
 export { default as DefaultScheduler } from './scheduling/default-scheduler';
-export type { Scheduler, SchedulerContext, SchedulerUpdateResult } from './scheduling/scheduler';
+export { default as ConflictScheduler } from './scheduling/conflict-scheduler';
+export type { ConflictSchedule } from './scheduling/conflict-scheduler';
+export type { Scheduler, SchedulerContext, SchedulerEffects, SchedulerUpdateResult } from './scheduling/scheduler';
 export { default as BaseEntity } from './entity';
 export { default as EntityFactory } from './entity-factory';
 export { defineEntityClasses, defineEntityConfigs } from './entity-class';

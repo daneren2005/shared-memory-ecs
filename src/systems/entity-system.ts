@@ -108,9 +108,26 @@ export default abstract class EntitySystem<C extends ComponentMap, T extends Bas
 		// A continuation must drain even if every live member left since the previous frame.
 		return this.isCurrentlyRunning() || this.entities.size > 0;
 	}
+	get creationReadComponents(): ReadonlyArray<PropertyKey> | undefined {
+		if(!this.options.components) {
+			return this.reads ? ['entity', ...this.reads] : undefined;
+		}
+		const required = this.options.components.filter(component => component !== 'entity');
+		return [...this.reads ?? [], ...required.length ? required : ['entity']];
+	}
+	get creationReadQueries(): ReadonlyArray<ReadonlyArray<PropertyKey>> | undefined {
+		if(this.checkAddEntity !== EntitySystem.prototype.checkAddEntity) {
+			return undefined;
+		}
+		return [this.options.components ?? []];
+	}
+	get readComponents(): ReadonlyArray<PropertyKey> | undefined {
+		const components = this.options.components ?? this.reads;
+		return components ? ['entity', ...components, ...this.reads ?? []] : undefined;
+	}
 }
 
-export interface EntitySystemConfig<C extends ComponentMap> extends IterableSystemConfig {
+export interface EntitySystemConfig<C extends ComponentMap> extends IterableSystemConfig<C> {
 	components?: Array<keyof C>
 	updateEntityOnAdd?: boolean
 }

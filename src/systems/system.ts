@@ -10,12 +10,19 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 	currentDelta: number = 0;
 	deltaBetweenRuns: number;
 	firstRun: boolean;
+	readonly reads?: ReadonlyArray<PropertyKey>;
+	readonly writes?: ReadonlyArray<PropertyKey>;
+	private readonly exclusive: boolean;
+	private scheduledGameTime: number | undefined;
 
-	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: SystemConfig = { name: 'System' }) {
+	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: SystemConfig<C> = { name: 'System' }) {
 		super();
 
 		this.name = options.name;
 		this.world = world;
+		this.reads = options.reads;
+		this.writes = options.writes;
+		this.exclusive = options.exclusive ?? false;
 
 		this.deltaBetweenRuns = options.deltaBetweenRuns ?? 0;
 		this.firstRun = options.firstRun !== undefined ? options.firstRun : false;
@@ -31,6 +38,18 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 	// world.load() joins its whole batch here instead of one entity-added at a time.
 	addEntities(batch: EntityBatch<C>): void {}
 
+	get gameTime(): number {
+		return this.scheduledGameTime ?? this.world.gameTime;
+	}
+	withGameTime<T>(gameTime: number, update: () => T): T {
+		const previous = this.scheduledGameTime;
+		this.scheduledGameTime = gameTime;
+		try {
+			return update();
+		} finally {
+			this.scheduledGameTime = previous;
+		}
+	}
 	update(elapsedTime: number): boolean {
 		this.currentDelta += elapsedTime;
 
@@ -78,6 +97,21 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 	shouldRun(): boolean {
 		return true;
 	}
+	get readComponents(): ReadonlyArray<PropertyKey> | undefined {
+		return this.reads;
+	}
+	get requiresExclusiveScheduling(): boolean {
+		return this.exclusive;
+	}
+	get createdComponents(): ReadonlyArray<PropertyKey> {
+		return [];
+	}
+	get creationReadComponents(): ReadonlyArray<PropertyKey> | undefined {
+		return this.readComponents;
+	}
+	get creationReadQueries(): ReadonlyArray<ReadonlyArray<PropertyKey>> | undefined {
+		return undefined;
+	}
 
 	destroy() {
 		this.removeAllListeners();
@@ -104,10 +138,13 @@ export function forEachInMatchingGroups<C extends ComponentMap>(batch: EntityBat
 	}
 }
 
-export interface SystemConfig {
+export interface SystemConfig<C extends ComponentMap = ComponentMap> {
 	name: string
 	deltaBetweenRuns?: number
 	firstRun?: boolean
+	reads?: ReadonlyArray<keyof C>
+	writes?: ReadonlyArray<keyof C>
+	exclusive?: boolean
 }
 
 // Which part of a run threw, for the `system-error` event.

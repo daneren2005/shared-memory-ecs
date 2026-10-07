@@ -46,18 +46,19 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
 
 | File | Responsibility |
 | --- | --- |
-| `system.ts` | `System<C>` abstract base: fixed-timestep `deltaBetweenRuns`, `update`→`run`, `shouldRun`, `firstRun`, plus the overridable `init`/`finishLoading` startup pair and the `addEntities(batch)` bulk-load hook (no-op base; `EntityBatch` + `forEachInMatchingGroups` live here). `onRunFinished` (fires `world.notifySystemRunCompleted`) and `isCurrentlyRunning()` let the world's deferred free tell when a system is done with memory; `waitForRunToComplete()` (a no-op base, real promise in `EntityWorkerSystem`) lets `world.clear()` await an in-flight run. EventEmitter (systems report a whole run in one emit). |
+| `system.ts` | `System<C>` abstract base: fixed-timestep `deltaBetweenRuns`, scoped `withGameTime()`/`gameTime` for opt-in logical dispatch, `update`→`run`, `shouldRun`, `firstRun`, plus the overridable `init`/`finishLoading` startup pair and the `addEntities(batch)` bulk-load hook (no-op base; `EntityBatch` + `forEachInMatchingGroups` live here). `onRunFinished` (fires `world.notifySystemRunCompleted`) and `isCurrentlyRunning()` let the world's deferred free tell when a system is done with memory; `waitForRunToComplete()` (a no-op base, real promise in `EntityWorkerSystem`) lets `world.clear()` await an in-flight run. `createdComponents`, `creationReadComponents`, and optional `creationReadQueries` expose publication access, conservative fallback reads, and separate required-component query lists; only the conflict scheduler inspects them. EventEmitter (systems report a whole run in one emit). |
 | `iterable-system.ts` | `IterableSystem<C,T>`: spreads one pass over multiple frames when it exceeds `maxMsPerFrame` (`iterationsPerCheck`, `getIterables`/`updateIterable`). |
 | `entity-system.ts` | `EntitySystem<C,T>`: main-thread iteration over entities owning `options.components`; auto add/remove via world events; `entities` Map by eid; `filterEntity` skips static. A sliced multi-frame run remains runnable until its queue drains, and revalidates each queued entity against current membership before updating it. |
-| `entity-worker-system.ts` | `EntityWorkerSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks, and the update-function hooks (`init`/`queryChanged`/`preRun`/`entityRemoved`; `queryChanged` receives each changed sub-query's delta before `preRun`). The largest / most involved file. |
+| `entity-worker-system.ts` | `EntityWorkerSystem`: runs an `updateFunction` over raw memory blocks, off-thread when Workers + `SharedArrayBuffer` exist, else main-thread fallback. Per-run worker `gameTime` comes from the system's scoped dispatch clock (live world clock under default scheduling). Queries (`required`/`optional`/`not`/`queries`), `addDataToWorld`, callbacks, and the update-function hooks (`init`/`queryChanged`/`preRun`/`entityRemoved`; `queryChanged` receives each changed sub-query's delta before `preRun`). A boolean or typed component list enables `createsEntities`; the list also declares publication access. Under conflict scheduling, a completion stays running until its buffered effects are applied or discarded. Discard frees unpublished blocks; stale-generation replies reclaim their allocations on this path. The default path still applies immediately. The largest / most involved file. |
 | `worker-system.ts` | `WorkerSystem<C,W,D>`: an `EntityWorkerSystem` that calls its function **once per run** over the named sub-queries instead of once per entity. It has **no main query** (`required` is forced `[]` and `tracksMainQuery` is false, so `this.entities` is never populated), and `shouldRun()` is always `true` so the `deltaBetweenRuns` cadence drives one run per interval even with zero entities. Reuses the whole EntityWorkerSystem worker/query/`createsEntities`/`addDataToWorld` machinery: the single run function `(world, queries, callbacks)` is wrapped as the update function's `preRun` (per-entity body a no-op) by `toEntityUpdateFunction`. Fresh per-run data is the existing `addDataToWorld(world)` channel (structured-cloned each run, so plain/cloneable). |
 
 ### Scheduling (`src/scheduling/`)
 
 | File | Responsibility |
 | --- | --- |
-| `scheduler.ts` | Public `Scheduler<C>`, `SchedulerContext<C>` (live system array + world `emit`), and `SchedulerUpdateResult` contracts. Synchronous `update` gets the scaled delta. Optional membership/reset/destroy/completion hooks expose existing lifecycle boundaries without run identities or edit barriers. The world itself satisfies the context, avoiding a per-update wrapper and stale system-array snapshots. |
+| `scheduler.ts` | Public `Scheduler<C>`, `SchedulerContext<C>` (live systems, world `emit`, optional logical `gameTime` and `paused`), and `SchedulerUpdateResult` contracts. Synchronous `update` gets the scaled delta. Optional context `prepareForSystemDispatch()` prepares shared memory for automatic dispatch and returns false during clear/destroy. Optional membership/pause/reset/destroy/completion hooks expose lifecycle boundaries. `SchedulerEffects` (`apply`/`discard`) and optional `prepareEffects`/`beforeClear` hooks let the conflict scheduler buffer worker completion without changing default scheduling or worker messages. The world itself satisfies the context, avoiding a per-update wrapper and stale system-array snapshots. |
 | `default-scheduler.ts` | `DefaultScheduler<C>`: the original registration-order `forEach` dispatch loop, including `shouldRun`, dispatch timing events, coarse error handling, and `lastSystemError`. No schedule cache, promises, graph work, or run-tracking allocations. Systems still own cadence, worker dispatch, and iterable continuation. |
+| `conflict-scheduler.ts` | Opt-in `ConflictScheduler<C>`: caches access declarations and frozen public `ConflictSchedule<C>` (`order`/`batches` describe dependency levels, not runtime barriers). Each host update queues one node per system with its delta and logical time. Per-component mutation frontiers, creation/reader tails keyed by access snapshot, per-system tails, and an exclusive tail connect conflicts in host-update/registration order, including pending work across frames. A ready queue dispatches independent nodes without waiting for whole batches or updates. Applied completion releases dependents and pumps them in a generation-guarded microtask after worker promises settle, including while paused. Sliced continuations advance at most once per host update while unpaused; during pause, generation-guarded timer tasks continue only active iterable slices until queued work drains, with zero extra delta and no worker polling. Queued nodes retain access snapshots across rebuilds; additions join future updates and removed pending nodes skip after dependencies settle. Missing declarations, boolean creation capabilities, and component-addition workers remain exclusive. Component-list creators have separate execution and publication dependencies: compatible allocation runs overlap, while effects wait for earlier matching membership readers, writers, and creators. A creation bound affects a built-in query only if it can supply every required component; explicit reads and writes remain component-level conflicts. Separate access snapshots prevent an unrelated later creator/reader from hiding older matching work across rebuilds. Captured completion handlers reject old scheduler generations. No fixed-tick engine. |
 
 ### Workers (`src/systems/workers/`) and actions (`src/actions/`)
 
@@ -103,7 +104,16 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
   after destroying systems. `notifySystemRunCompleted` retains the existing free-buffer handling, then calls
   `scheduler.runCompleted`: synchronous return, sliced queue drained, or current-generation worker effects
   applied. Fallback completion can be reentrant during dispatch. Dispatch timing events and PerformanceTiming
-  retain their existing meaning; no new completion events or run identities are introduced in this extraction.
+  retain their existing meaning. Worker computation timing fires on receipt, and effect timing fires at publication. `prepareEffects` captures the scheduler node before posting a run, so reset cannot associate an old reply with a new node.
+  `ConflictScheduler` compiles on membership hooks and automatically dispatches ready dependencies outside
+  the host update envelope. Its microtasks and slice timers are canceled on reset/destroy; the optional context dispatch
+  preparation keeps spare buffers available; `dispatchAllowed` gates dispatch during async clear,
+  and destruction without repeatedly preparing memory for each system in a parallel batch.
+  The `paused` accessor calls optional `scheduler.pause(world)` when it becomes true, including direct assignment.
+  Paused host updates enqueue nothing and freeze game time, but the conflict scheduler drains queued dependencies and
+  buffered effects; active iterable slices yield through timer tasks without advancing either world clock.
+  Unpaused iterable continuation and default-scheduler pause behavior remain host-update driven.
+  Async clear sets its dispatch gate and calls optional `beforeClear` before awaiting workers so completion cannot start an unawaited run. The conflict scheduler cancels publication dependencies and discards buffered or subsequently returned effects, preventing a deadlock behind a sliced run. This path also awaits creators in a pristine world; default pristine-clear behavior is unchanged. Conflict-scheduled reload also tears down a pristine world with in-flight work, so old unpublished creations cannot enter the new load.
 - **Error handling:** user code (an update body, `queryChanged`, `preRun`, `entityRemoved`, an `EntitySystem`'s `updateEntity` /
   `beforeRunIterables`) never aborts a whole run when it throws. Each is wrapped in try/catch: a per-entity failure
   is logged and the run continues with the next entity; a `preRun`/`beforeRunIterables` failure skips that run's
@@ -204,13 +214,13 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
   (`allocateComponentBlock`) filled by the component's `toBlock(config)` — the worker-safe half of the definition
   (no entity/world access). `entity` and `loadInFinishLoading` components are skipped. It reports
   a `WorkerCreatedEntity` (`{ eid, type, class?, isStatic?, components: { name: index } }`) through
-  `callbacks.createEntity`. On run-complete the main thread calls `world.adoptEntity(descriptor)`: the factory
+  `callbacks.createEntity`. When completion effects are applied the main thread calls `world.adoptEntity(descriptor)`: the factory
   selects the registered wrapper, then the world builds the `entity` component on the main thread (interning
   identity strings is main-thread-only), and `entity.attachComponent(name, index)` wraps each
   worker-written block via the definition's `attach(entity, memory, index)` half with no config — no block is
   re-allocated (a component's own extra allocations, if any, live in `attach`, so they happen the same way whether
   loaded or adopted). It then `addEntity`s the entity so it joins systems via
-  `entity-added` on the next frame. Two opt-ins gate it: the system's `createsEntities: true` (ships the factory
+  `entity-added` for subsequent dispatches. Two opt-ins gate it: the system's boolean or component-list `createsEntities` (ships the factory
   configs and serializable class allowlists to its worker on load) and the worker entry passing the component
   registry to `createEntitySystemWorker` (so the worker has each `toBlock`). Runs identically on the main-thread
   fallback. The descriptor returns the template-derived class key; `world.adoptEntity` asks the main-thread factory
@@ -236,6 +246,23 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
   component definitions in the worker entry; it uses the same spare-buffer safeguard as worker entity creation.
 
 ## Conventions / gotchas
+
+- **System access:** generic `SystemConfig<C>` adds optional typed `reads`, `writes`, and `exclusive`.
+  Runtime `System.readComponents` exposes declared reads; `EntitySystem` adds its component query and
+  `entity`, and `EntityWorkerSystem` adds required/optional components from its main and named queries
+  plus `entity`. `reads` adds access outside queries; unknown reads or omitted `writes` reserve the whole
+  batch in `ConflictScheduler`. `writes: []` explicitly opts into read-only access. Boolean `createsEntities: true` and
+  component allocation via `addsComponents` force `requiresExclusiveScheduling`; a typed
+  `createsEntities: [...]` list enables parallel creation and adds the built-in `entity` to publication
+  access. Query membership conflicts compare every required component of each main/named query against
+  the creator's possible components; optional/not keys do not make an otherwise unrelated query conflict.
+  Since creation lists are upper bounds, `not` cannot rule out a possible match. Empty/entity-only queries
+  observe all creations. Optional `creationReadQueries` metadata is copied on rebuild; built-in systems
+  provide it, while custom membership overrides retain `creationReadComponents` fallback. Explicit reads
+  outside queries and writes still conflict by component. Creation is a publication write against
+  matching membership readers and existing writers, while two creators may compute
+  in parallel and publish in order. Existing mutations and other structural/callback effects still need
+  truthful `writes` declarations or `exclusive: true`. Default scheduling does not inspect these declarations.
 
 - `world.entities` (and `EntitySystem`/`EntityWorkerSystem` `entities`) are **Maps keyed by
   eid**, not arrays — deletes are O(1) and this replaced the old `entitiesByEid`. Iterate

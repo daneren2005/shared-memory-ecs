@@ -86,7 +86,7 @@ export default class BaseWorld<
 	// Keeps advancing while paused and is never scaled by timeScale (unlike gameTime).
 	playerTime = 0;
 	timeScale = 1;
-	paused = false;
+	private isPaused = false;
 	destroyed = false;
 	// True while the world has never been loaded into
 	pristine = true;
@@ -97,6 +97,7 @@ export default class BaseWorld<
 	// one currently waiting for its systems to each finish a run before its blocks can be reused
 	private activeFreeBuffer: ComponentFreeBuffer<C> = { frees: [], waitingSystems: new Set(), waitElapsed: 0 };
 	private nextFreeBuffer: ComponentFreeBuffer<C> = { frees: [], waitingSystems: new Set(), waitElapsed: 0 };
+	private clearing = false;
 
 	// The entity component is added automatically, so it must not be part of the passed registry.
 	constructor(registry: R, options: WorldOptions<C, Cfg, E> = {}) {
@@ -230,7 +231,7 @@ export default class BaseWorld<
 	// finishLoading is called on each once the whole batch exists, so cross-entity dependencies can resolve.
 	load(config: WorldConfig<Cfg>) {
 		// A pristine world (fresh or just cleared) has nothing to tear down, so skip the per-system clear.
-		if(!this.pristine) {
+		if(!this.pristine || (this.scheduler.prepareEffects && this.systems.some(system => system.isCurrentlyRunning()))) {
 			// Iterate over a copy since removeEntity mutates `this.entities`.
 			for(let entity of Array.from(this.entities.values())) {
 				this.removeEntity(entity);
@@ -275,25 +276,30 @@ export default class BaseWorld<
 		void this.finishLoadingSystems();
 	}
 	async clear(): Promise<void> {
-		if(this.pristine) {
+		if(this.pristine && !this.scheduler.beforeClear) {
 			return;
 		}
 
-		// Capture and await active runs before clear() resets their state. Component blocks cannot be released while a
-		// worker still holds views over them, since the pool may immediately reuse those indexes after clear resolves.
-		await Promise.all(
-			this.systems
-				.map(system => system.waitForRunToComplete())
-				.filter(promise => promise instanceof Promise),
-		);
-		for(let entity of Array.from(this.entities.values())) {
-			this.removeEntity(entity);
-		}
-		this.systems.forEach(system => system.clear());
-		this.scheduler.reset?.(this);
-		this.freeAllPendingBuffers();
+		this.clearing = true;
+		try {
+			this.scheduler.beforeClear?.(this);
+			// Await active workers before their component blocks can be reused.
+			await Promise.all(
+				this.systems
+					.map(system => system.waitForRunToComplete())
+					.filter(promise => promise instanceof Promise),
+			);
+			for(let entity of Array.from(this.entities.values())) {
+				this.removeEntity(entity);
+			}
+			this.systems.forEach(system => system.clear());
+			this.scheduler.reset?.(this);
+			this.freeAllPendingBuffers();
 
-		this.pristine = true;
+			this.pristine = true;
+		} finally {
+			this.clearing = false;
+		}
 	}
 	removeEntity(entity: E) {
 		// Match the instance as well as the eid: a stale entity must not remove a newer entity that owns the same key.
@@ -479,6 +485,30 @@ export default class BaseWorld<
 	}
 	pause() {
 		this.paused = true;
+	}
+	get paused(): boolean {
+		return this.isPaused;
+	}
+	set paused(paused: boolean) {
+		if(this.isPaused === paused) {
+			return;
+		}
+		this.isPaused = paused;
+		if(paused) {
+			this.scheduler.pause?.(this);
+		}
+	}
+	prepareForSystemDispatch(): boolean {
+		if(!this.dispatchAllowed) {
+			return false;
+		}
+		if(this.needsSpareBuffer) {
+			this.heap.ensureSpareBuffer();
+		}
+		return true;
+	}
+	get dispatchAllowed(): boolean {
+		return !this.clearing && !this.destroyed;
 	}
 	resume() {
 		this.paused = false;

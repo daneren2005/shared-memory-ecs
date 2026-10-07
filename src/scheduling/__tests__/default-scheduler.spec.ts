@@ -11,7 +11,7 @@ class RecordingSystem extends System<Components> {
 	active = true;
 	onRun?: () => void;
 
-	constructor(world: TestWorld, options: SystemConfig = { name: 'Recording' }) {
+	constructor(world: TestWorld, options: SystemConfig<Components> = { name: 'Recording' }) {
 		super(world, options);
 	}
 

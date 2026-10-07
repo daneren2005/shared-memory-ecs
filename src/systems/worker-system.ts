@@ -39,12 +39,12 @@ export interface WorkerSystemConfig<
 	C extends ComponentMap,
 	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
-> extends SystemConfig {
+> extends SystemConfig<C> {
 	updateFunction: WorkerSystemRunFunction<C, W, D>
 	getWorker: () => Worker
 	forceMainThread?: boolean
 	getInitData?: () => D
-	createsEntities?: boolean
+	createsEntities?: boolean | ReadonlyArray<keyof C>
 	queries?: { [key: string]: EntityWorkerSystemQuery<C> }
 }
 

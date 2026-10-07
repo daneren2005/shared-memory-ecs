@@ -7,6 +7,7 @@ import type { ComponentTypedArray } from '../memory-component';
 import System, { forEachInMatchingGroups, type EntityBatch, type SystemConfig } from './system';
 import type EntitySystemWorkerMessage from './workers/entity-system-worker-message';
 import EntitySystemWebWorker from './workers/entity-system-web-worker';
+import type { SchedulerEffects } from '../scheduling/scheduler';
 
 const MAIN_QUERY_NAME = '___main';
 
@@ -30,6 +31,8 @@ export default abstract class EntityWorkerSystem<
 	private loadingPromise: Resolvable | null = null;
 	private runCompletePromise: Resolvable | null = null;
 	private isRunning = false;
+	private pendingEffects: SchedulerEffects | undefined;
+	private completeEffects: ((effects: SchedulerEffects) => void) | undefined;
 	// Bumped by clear(); checked on each event to make certain we are dealing with the correct world
 	private generation = 0;
 	protected queryEntities: { [key: string]: Map<number, BaseEntity<C>> } = {};
@@ -94,67 +97,56 @@ export default abstract class EntityWorkerSystem<
 			} else if(message.type === 'run-complete') {
 				// A reply from a run that started before a clear(): the world it ran over is gone, so drop it whole.
 				if(message.generation !== this.generation) {
+					if(this.world.scheduler.prepareEffects) {
+						this.discardWorkerAllocations(message);
+					}
 					return;
 				}
 
-				this.isRunning = false;
+				if(!this.completeEffects) {
+					this.applyWorkerEffects(message);
+					return;
+				}
 				this.world.emit(`system-${this.name}-worker-finished`, message.runTime);
-
-				// User-code errors caught inside the run: log + emit on the main thread, one per failure.
-				message.errors.forEach(({ error, entityId, phase }) => {
-					this.onError(error, { entityId, phase });
-				});
-
-				// Structural changes are applied only after the worker has finished iterating its snapshot. Attaching emits
-				// the same entity events as a main-thread mutation, which rechecks every affected system/query and queues
-				// refreshed component bundles for their next run.
-				(message.componentChanges ?? []).forEach(change => {
-					const entity = this.world.getEntityByEid(change.entityId);
-					if(change.type === 'add') {
-						const definition = this.world.registry[change.component.name as keyof C];
-						if(!entity || !definition || change.component.name === 'entity') {
-							definition?.memoryComponent.delete(change.component.index);
+				const generation = this.generation;
+				let settled = false;
+				const finish = () => {
+					this.pendingEffects = undefined;
+					this.isRunning = false;
+					this.runCompletePromise?.resolve();
+					this.runCompletePromise = null;
+				};
+				const effects: SchedulerEffects = {
+					apply: () => {
+						if(settled) {
 							return;
 						}
-
-						const componentName = change.component.name as keyof C;
-						entity.removeComponent(componentName);
-						entity.attachComponent(componentName, change.component.index, true);
-					} else if(entity && change.componentName !== 'entity') {
-						entity.removeComponent(change.componentName);
-					}
-				});
-
-				// Before the per-entity events: an entity killed this run is still in the world here, since `death`
-				// is dispatched below and removes it.
-				for(const event of Object.keys(message.systemEvents)) {
-					this.emit(event, message.systemEvents[event]);
-				}
-
-				message.events.forEach(event => {
-					// Look up on the world, not the query cache, so events for sub-query-only entities still route.
-					const entity = this.world.getEntityByEid(event.entityId);
-					if(!entity) {
-						console.warn(`${this.name}-event ${event.event}: Could not find entity with id ${event.entityId}`);
-						return;
-					}
-
-					entity.emit(event.event, ...event.args);
-				});
-
-				// After deaths, so an entity created this run isn't immediately removed. Adopts the blocks the worker
-				// already allocated + wrote, rather than re-creating them.
-				message.created.forEach(descriptor => {
-					this.world.adoptEntity(descriptor);
-				});
-
-				this.world.emit(`system-${this.name}-worker-events-finished`, message.runTime);
-				this.world.notifySystemRunCompleted(this);
-
-				if(this.runCompletePromise) {
-					this.runCompletePromise.resolve();
-					this.runCompletePromise = null;
-				}
+						if(generation !== this.generation) {
+							effects.discard();
+							return;
+						}
+						settled = true;
+						this.pendingEffects = undefined;
+						try {
+							this.applyWorkerEffects(message, false);
+						} catch(error) {
+							this.onError(error as Error, { phase: 'run' });
+							this.world.notifySystemRunCompleted(this);
+						} finally {
+							finish();
+						}
+					},
+					discard: () => {
+						if(settled) {
+							return;
+						}
+						settled = true;
+						this.discardWorkerAllocations(message);
+						finish();
+					},
+				};
+				this.pendingEffects = effects;
+				this.completeEffects(effects);
 			}
 		};
 
@@ -163,6 +155,82 @@ export default abstract class EntityWorkerSystem<
 		};
 
 		this.worker.postMessage(message);
+	}
+
+	private applyWorkerEffects(message: WorkerRunCompletion, emitWorkerFinished = true): void {
+		this.isRunning = false;
+		if(emitWorkerFinished) {
+			this.world.emit(`system-${this.name}-worker-finished`, message.runTime);
+		}
+
+		// User-code errors caught inside the run: log + emit on the main thread, one per failure.
+		message.errors.forEach(({ error, entityId, phase }) => {
+			this.onError(error, { entityId, phase });
+		});
+
+		// Structural changes are applied only after the worker has finished iterating its snapshot. Attaching emits
+		// the same entity events as a main-thread mutation, which rechecks every affected system/query and queues
+		// refreshed component bundles for their next run.
+		(message.componentChanges ?? []).forEach(change => {
+			const entity = this.world.getEntityByEid(change.entityId);
+			if(change.type === 'add') {
+				const definition = this.world.registry[change.component.name as keyof C];
+				if(!entity || !definition || change.component.name === 'entity') {
+					definition?.memoryComponent.delete(change.component.index);
+					return;
+				}
+
+				const componentName = change.component.name as keyof C;
+				entity.removeComponent(componentName);
+				entity.attachComponent(componentName, change.component.index, true);
+			} else if(entity && change.componentName !== 'entity') {
+				entity.removeComponent(change.componentName);
+			}
+		});
+
+		// Before the per-entity events: an entity killed this run is still in the world here, since `death`
+		// is dispatched below and removes it.
+		for(const event of Object.keys(message.systemEvents)) {
+			this.emit(event, message.systemEvents[event]);
+		}
+
+		message.events.forEach(event => {
+			// Look up on the world, not the query cache, so events for sub-query-only entities still route.
+			const entity = this.world.getEntityByEid(event.entityId);
+			if(!entity) {
+				console.warn(`${this.name}-event ${event.event}: Could not find entity with id ${event.entityId}`);
+				return;
+			}
+
+			entity.emit(event.event, ...event.args);
+		});
+
+		// After deaths, so an entity created this run isn't immediately removed. Adopts the blocks the worker
+		// already allocated + wrote, rather than re-creating them.
+		message.created.forEach(descriptor => {
+			this.world.adoptEntity(descriptor);
+		});
+
+		this.world.emit(`system-${this.name}-worker-events-finished`, message.runTime);
+		this.world.notifySystemRunCompleted(this);
+
+		if(this.runCompletePromise) {
+			this.runCompletePromise.resolve();
+			this.runCompletePromise = null;
+		}
+	}
+
+	private discardWorkerAllocations(message: WorkerRunCompletion): void {
+		for(const entity of message.created) {
+			for(const [name, index] of Object.entries(entity.components)) {
+				this.world.registry[name as keyof C]?.memoryComponent.delete(index);
+			}
+		}
+		for(const change of message.componentChanges ?? []) {
+			if(change.type === 'add') {
+				this.world.registry[change.component.name as keyof C]?.memoryComponent.delete(change.component.index);
+			}
+		}
 	}
 
 	init(): Promise<void> | void {
@@ -208,6 +276,7 @@ export default abstract class EntityWorkerSystem<
 	// Un-initializes the system so its world can be reused
 	clear() {
 		super.clear();
+		this.pendingEffects?.discard();
 
 		if(this.isRunning) {
 			if(!this.runCompletePromise) {
@@ -240,6 +309,39 @@ export default abstract class EntityWorkerSystem<
 	isCurrentlyRunning(): boolean {
 		return this.isRunning;
 	}
+	get readComponents(): ReadonlyArray<PropertyKey> {
+		const queries = [this.options, ...Object.values(this.options.queries ?? {})];
+		return ['entity', ...this.reads ?? [], ...queries.flatMap(query => [...query.required, ...query.optional ?? []])];
+	}
+	get requiresExclusiveScheduling(): boolean {
+		return super.requiresExclusiveScheduling || this.options.createsEntities === true || !!this.options.addsComponents;
+	}
+	get createdComponents(): ReadonlyArray<PropertyKey> {
+		const components = this.options.createsEntities;
+		return components && typeof components !== 'boolean' ? ['entity', ...components] : [];
+	}
+	get creationReadComponents(): ReadonlyArray<PropertyKey> {
+		const queries = Object.values(this.options.queries ?? {});
+		if(this.tracksMainQuery) {
+			queries.push(this.options);
+		}
+		return [...this.reads ?? [], ...queries.flatMap(query => {
+			const required = query.required.filter(component => component !== 'entity');
+			const optional = query.optional?.filter(component => component !== 'entity') ?? [];
+			// With another required component, reading dead flags does not make this an all-entity query.
+			return [...required.length ? required : ['entity'], ...optional, ...query.not ?? []];
+		})];
+	}
+	get creationReadQueries(): ReadonlyArray<ReadonlyArray<PropertyKey>> | undefined {
+		if(this.checkAddEntity !== EntityWorkerSystem.prototype.checkAddEntity || this.matchesQuery !== EntityWorkerSystem.prototype.matchesQuery) {
+			return undefined;
+		}
+		const queries = Object.values(this.options.queries ?? {});
+		if(this.tracksMainQuery) {
+			queries.push(this.options);
+		}
+		return queries.map(query => query.required);
+	}
 	waitForRunToComplete(): void | Promise<void> {
 		if(!this.isRunning) {
 			return;
@@ -252,12 +354,13 @@ export default abstract class EntityWorkerSystem<
 	}
 	run(elapsedTime: number): void {
 		const world = {
-			gameTime: this.world.gameTime,
+			gameTime: this.gameTime,
 			elapsedTime,
 		} as W;
 		this.addDataToWorld?.(world);
 
 		this.isRunning = true;
+		this.completeEffects = this.world.scheduler.prepareEffects?.(this.world, this);
 		let entities = this.buildQueryDelta(MAIN_QUERY_NAME, this.options);
 		let queries: { [key: string]: QueryDelta<T> } = {};
 		Object.entries(this.options.queries ?? {}).forEach(([queryKey, query]) => {
@@ -423,6 +526,7 @@ export default abstract class EntityWorkerSystem<
 
 	destroy() {
 		super.destroy();
+		this.pendingEffects?.discard();
 
 		if('terminate' in this.worker) {
 			this.worker.terminate();
@@ -565,7 +669,7 @@ export interface EntityWorkerSystemConfig<
 	T extends EntityUpdateComponents<C>,
 	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
-> extends SystemConfig, EntityWorkerSystemQuery<C> {
+> extends SystemConfig<C>, EntityWorkerSystemQuery<C> {
 	updateFunction: EntityUpdateFunction<C, T, W, D>
 	getWorker: () => Worker
 	forceMainThread?: boolean
@@ -573,7 +677,8 @@ export interface EntityWorkerSystemConfig<
 	// Opt in to worker-side entity creation (createEntityWorker). When set, factory templates and serializable class
 	// allowlists are shipped to this system's worker; the worker entry must also pass the component registry to
 	// createEntitySystemWorker so it has each component's toBlock(). Only systems that create entities need either.
-	createsEntities?: boolean
+	// A component list declares publication access for ConflictScheduler; true stays exclusive there.
+	createsEntities?: boolean | ReadonlyArray<keyof C>
 	// Opt in to worker-side component allocation through addComponentWorker. The worker entry must also pass the
 	// component registry to createEntitySystemWorker so the worker has each component's toBlock().
 	addsComponents?: boolean
@@ -582,3 +687,5 @@ export interface EntityWorkerSystemConfig<
 }
 
 export type { BaseComponent };
+
+type WorkerRunCompletion = Extract<EntitySystemWorkerMessage, { type: 'run-complete' }>;

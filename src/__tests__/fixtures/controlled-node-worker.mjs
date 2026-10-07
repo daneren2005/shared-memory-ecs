@@ -45,6 +45,10 @@ parentPort.on('message', message => {
 	}
 
 	applyDelta(message.entities);
+	if(control.length >= 4) {
+		Atomics.store(control, 2, message.world.gameTime);
+		Atomics.store(control, 3, message.world.elapsedTime);
+	}
 	Atomics.store(control, STARTED_INDEX, 1);
 	Atomics.notify(control, STARTED_INDEX);
 	Atomics.wait(control, RESUME_INDEX, 0);

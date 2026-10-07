@@ -198,7 +198,7 @@ Classless factories keep the original behavior: they create `BaseEntity` and sca
 `world.update(elapsedTime)` uses `DefaultScheduler` to dispatch systems in registration order.
 Synchronous systems run immediately, workers can overlap after dispatch, and iterable systems can
 continue across updates. Systems keep their existing `shouldRun()`, `deltaBetweenRuns`, and `firstRun`
-behavior. The world advances clocks, applies `timeScale`, skips dispatch while paused, prepares shared
+behavior. The world advances clocks, applies `timeScale`, skips new updates while paused, prepares shared
 memory, and manages deferred component frees.
 
 Select a scheduler at construction; `world.scheduler` is readonly:
@@ -213,7 +213,8 @@ world.update(16); // Synchronous result: { lastSystemError: null } when no dispa
 ```
 
 Custom policies implement `Scheduler<C>`. Its synchronous `update(context, elapsedTime)` receives the
-scaled delta and a `SchedulerContext<C>` exposing the live `systems` array and the world's `emit` method.
+scaled delta and a `SchedulerContext<C>` exposing the live `systems` array, the world's `emit` method,
+and optional `gameTime` (supplied by `BaseWorld`).
 It returns `SchedulerUpdateResult` (`{ lastSystemError?: Error | null }`). `DefaultScheduler` preserves
 the existing dispatch timing events, error reporting, and continuation after a system throws.
 
@@ -230,6 +231,155 @@ an iterable queue drained, or a current-generation worker reply's effects were a
 completion can arrive inside scheduler dispatch. The world processes eligible deferred frees before
 calling this hook. Dispatch return values and `system-<name>-finished` events do not imply completion.
 These hooks expose lifecycle notifications; they do not establish deterministic ticks or safe edit barriers.
+
+Use `ConflictScheduler` to prevent systems from overlapping when one writes a component the other reads
+or writes. Conflicts follow registration order; read-only systems and systems accessing independent
+components can overlap:
+
+```ts
+import { BaseWorld, ConflictScheduler, EntityWorkerSystem } from '@daneren2005/shared-memory-ecs';
+
+const world = new BaseWorld(registry, {
+	scheduler: new ConflictScheduler<Components>()
+});
+
+class DamageSystem extends EntityWorkerSystem<Components, { health: Int32Array }> {
+	constructor() {
+		super(world, {
+			name: 'Damage',
+			required: ['health'],
+			writes: ['health'],
+			updateFunction: damageUpdate,
+			getWorker: () => new Worker(new URL('./damage-worker.ts', import.meta.url), { type: 'module' })
+		});
+	}
+}
+world.addSystem(new DamageSystem());
+```
+
+The scheduler compiles its schedule when systems are added or removed. Inspect it before the first
+update using the scheduler instance:
+
+```ts
+const scheduler = new ConflictScheduler<Components>();
+const world = new BaseWorld(registry, { scheduler });
+// Register your systems here.
+console.log(scheduler.schedule.order.map(system => system.name));
+console.table(scheduler.schedule.batches.map((batch, index) => ({
+	batch: index,
+	systems: batch.map(system => system.name).join(', ')
+})));
+```
+
+`schedule` is a frozen `ConflictSchedule<C>` containing system references. `order` flattens the
+compiled dependency levels, and `batches` group systems that can run concurrently within one update.
+Every conflict points from the earlier registered system to the later one. Each system goes into the
+earliest level after its conflicting predecessors. These groups describe dependencies, not runtime
+barriers: a system starts when its own predecessors finish, even if unrelated systems in an earlier
+group are still running. Actual dispatch can also overlap independent work from later host updates.
+
+`writes` lists every component a system changes, including components reached outside its main query.
+Use `writes: []` for a read-only system. Reads are inferred from `EntitySystem.components` and from worker
+`required`, `optional`, and all named `queries`. The built-in `entity` component is also a read. Add
+`reads: ['otherComponent']` for access outside those queries, including filters and hooks. A plain
+`System` or `IterableSystem` supplies both `reads` and `writes`; an `EntitySystem` without a component
+query supplies `reads` explicitly. Component names are checked against the system's component type.
+
+Omitting `writes`, or leaving reads unknown, makes a system exclusive. `exclusive: true` also reserves
+exclusive execution for a system whose callbacks, structural changes, or shared resources cannot be
+described through component access. Workers with `createsEntities: true` or `addsComponents: true` remain
+exclusive. Declare writes to `entity` when changing its flags; arbitrary callback effects still need
+explicit declarations or exclusive execution.
+
+For parallel worker creation, `EntityWorkerSystem` and `WorkerSystem` accept a component list in the
+existing capability option, for example `createsEntities: ['health', 'movement']`. List every game
+component the system can create, including components supplied by factory templates. The built-in
+`entity` component is included automatically. `writes` still declares changes to existing components;
+creation declarations do not authorize undeclared callback or attachment effects on existing data.
+Both boolean and list forms enable the same worker allocator, factory templates, and stable atomic eids.
+The default scheduler treats both forms identically and adopts results immediately on completion.
+
+Under `ConflictScheduler`, compatible creators can allocate and initialize blocks concurrently, even
+in the same component pool. Publication stays in scheduling order and waits for earlier readers and
+writers of the affected components; later readers and writers wait until publication is applied.
+A creator can therefore compute beside an earlier reader without changing that reader's query snapshot.
+A later query waits for publication when the creator's component list can supply every required
+component of that query. For example, creating `['transform', 'item']` does not block a query requiring
+`['transform', 'tree']`, even when it optionally reads `item` or excludes it with `not`. Main and named
+queries are checked separately; a match with any one retains the dependency. An empty or entity-only
+query still observes every creation. Explicit `reads` outside queries and all `writes` retain their
+component conflicts, so accessing `world.entities` directly must still be declared.
+
+Creation lists describe all components a system can create, not one exact entity shape. Optional
+components and exclusions therefore cannot prove a query unrelated when its required components could
+all be created. Custom query filters need explicit `reads` for accesses outside their declared
+components. Custom membership overrides retain conservative component-level creation access unless
+they provide accurate `creationReadQueries` metadata. This optional system getter exposes separate
+required-component lists to the conflict scheduler; `undefined` uses `creationReadComponents` as before.
+Queued updates keep their original query and creation snapshots across schedule rebuilds.
+
+Worker completion effects are kept together, preserving component-change, event, death, and adoption
+order within each run. Attachment hooks and callbacks affecting other shared data still need truthful
+`writes` or `exclusive: true`. Completion promises and memory-free notifications settle only after
+application; cancellation discards unpublished blocks. These rules apply only to the conflict scheduler.
+
+Each host update queues one update per registered system with its scaled delta and logical game time.
+Updates of the same system stay sequential. Read/write and write/write conflicts preserve host-update
+order, then registration order within an update, including dependencies on work that has not started
+yet. Read/read access across different systems can overlap. Independent systems can advance into later
+updates while a slow worker is unfinished; there is no whole-update or whole-batch completion barrier.
+Exclusive work remains a barrier to all earlier and later work, including workers using the boolean
+creation capability.
+
+When asynchronous systems finish applying effects, a microtask dispatches newly ready work after
+their completion promises settle, without waiting for another animation frame. Deltas stay in each
+system's order without merging or dropping them; `deltaBetweenRuns`, remainders and `firstRun` retain
+their existing behavior. While unpaused, sliced systems continue at most once per host update with
+zero extra delta, and release their dependents when the slice queue drains. Conflicting work can still
+build a backlog.
+
+During scheduled `shouldRun()` and `update()` calls, `System.gameTime` reports the logical time of the
+queued update. Worker `world.gameTime` uses that captured value, on real workers and the synchronous
+fallback alike. Delayed dispatch therefore does not borrow a later host update's clock. Outside that
+scope, `System.gameTime` returns the live world clock. Custom schedulers can use
+`system.withGameTime(time, () => system.update(delta))` to establish the same scope. Plain systems and
+`addDataToWorld()` implementations should use `this.gameTime` when they need scheduled time; direct
+reads of `this.world.gameTime` still see the host clock. The default scheduler continues using its
+existing `update(delta)` path and live clock.
+
+The compiled schedule is reused until membership changes or `scheduler.rebuild(world)` is called.
+Call `rebuild` after changing access declarations, or to inspect direct edits to `world.systems` before
+the next update; direct membership edits are otherwise checked before each dispatch. Queued updates
+retain their original access reservations, even if metadata is rebuilt while a worker is running.
+Additions join future host updates; removed pending updates are skipped when their predecessors finish,
+and removed running systems retain their reservations until completion. With `ConflictScheduler`,
+`world.pause()` or `world.paused = true` stops enqueueing new updates but finishes draining existing
+work without further `world.update()` calls. Queued systems retain their captured deltas and logical
+times; sliced runs continue through timer tasks with zero extra delta, yielding between slices.
+Worker effects publish as their dependencies finish. Draining does not advance either world clock;
+calling `world.update()` while paused still advances only `playerTime`. `world.resume()` allows new
+work to be queued on the next host update. Reload/clear and destroy discard queued updates and
+cancel scheduled microtasks and slice timers. The world prepares shared memory before deferred dispatch and prevents
+new dispatch while clearing or destroyed. Errors from automatic dispatch emit `system-error`; they
+cannot change a result already returned by `world.update()`.
+
+Custom asynchronous systems must report `isCurrentlyRunning()` and notify completion through
+`onRunFinished()` when their work and effects finish. Schedulers may implement the optional
+`prepareEffects(context, system)` hook: it captures the dispatched run and returns a handler receiving
+`SchedulerEffects` with `apply()` and `discard()`. The handler must eventually call one of them.
+`beforeClear(context)` lets such schedulers discard pending effects before the world awaits workers.
+The optional `pause(context)` hook is called when the world's paused flag becomes true, including
+direct assignment. `context.paused` indicates whether new host updates are suspended;
+`context.dispatchAllowed` and `prepareForSystemDispatch()` gate deferred dispatch during teardown.
+Schedulers without these hooks retain immediate application and the existing clear path.
+
+This scheduler provides component conflict ordering with the existing synchronous update API. It does
+not implement fixed simulation ticks or impose a stable order on unrelated workers' callbacks.
+World clocks continue advancing with host updates, and slicing continues to use wall-clock budgets.
+For a fixed input-update sequence, declared conflicting operations and each system's deltas/logical
+times remain ordered independently of worker completion order. Independent callbacks and timing events
+can arrive in different orders; shared effects must be declared as conflicts or marked exclusive.
+Repeatable simulations also need deterministic inputs and system code, and safe external world edits.
 
 ## Iterating entities
 
@@ -565,15 +715,15 @@ createEntityWorker(world, { type: 'ship', x: 100, y: 150 }, callbacks);
 counter (so it never collides with one the main thread or another worker hands out), and for each component
 the merged config triggers, pushes a block into its pool and writes the values - all off-thread. With entity
 classes registered, the worker also resolves the template's class and considers only its allowed components. It reports
-back an id-plus-block-indexes descriptor; when the run completes the main thread *adopts* it, building the
+back an id-plus-block-indexes descriptor; when completion effects are applied the main thread *adopts* it, building the
 always-present `entity` component there (interning `type` and `class` is a main-thread job), asking the factory
-for the registered wrapper, and attaching each block the worker wrote - no block is copied or re-allocated. Like
-every other worker report-back, the new entity first
-exists on the following frame, so the system picks it up next run.
+for the registered wrapper, and attaching each block the worker wrote - no block is copied or re-allocated. The new entity joins queries at adoption and is available to subsequent dispatches. The default scheduler
+adopts immediately on completion; the conflict scheduler can defer adoption until publication is safe.
 
 Two things make this work, both opt-in so only the workers that create entities pay for them:
 
-- Register the system with `createsEntities: true`. That ships the factory templates to its worker on load.
+- Register the system with `createsEntities: true`, or a component list for parallel conflict scheduling.
+  Both forms ship the factory templates to its worker on load.
 - In that system's worker entry, pass your component registry to `createEntitySystemWorker`, so the worker has
   each component's block builder:
 

@@ -8,7 +8,7 @@ export default abstract class IterableSystem<C extends ComponentMap, T> extends 
 	iterationsPerCheck: number;
 	maxMsPerFrame: number;
 
-	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: IterableSystemConfig) {
+	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: IterableSystemConfig<C>) {
 		super(world, options);
 
 		this.iterationsPerCheck = options.iterationsPerCheck ?? 1;
@@ -94,7 +94,7 @@ export default abstract class IterableSystem<C extends ComponentMap, T> extends 
 	abstract updateIterable(iterable: T, elapsedTime: number): void;
 }
 
-export interface IterableSystemConfig extends SystemConfig {
+export interface IterableSystemConfig<C extends ComponentMap = ComponentMap> extends SystemConfig<C> {
 	iterationsPerCheck?: number
 	maxMsPerFrame?: number
 }
