@@ -14,6 +14,13 @@ class IncrementalSystem extends EntityWorkerSystem<Components, { health: Int32Ar
 }
 
 let world: TestWorld;
+
+async function step(system: IncrementalSystem, delta: number) {
+	world.update(delta);
+	await system.waitForRunToComplete();
+	await Promise.resolve();
+}
+
 afterEach(() => {
 	world?.destroy();
 	vi.restoreAllMocks();
@@ -27,11 +34,6 @@ describe.each([true, false])('incremental work (fallback: %s)', forceMainThread 
 		await system.finishLoading();
 		const entities = Array.from({ length: 5 }, () => world.loadEntity({ maxHealth: 1000 }));
 		return { system, entities };
-	}
-	async function step(system: IncrementalSystem, delta: number) {
-		world.update(delta);
-		await system.waitForRunToComplete();
-		await Promise.resolve();
 	}
 
 	it.each([true, false])('visits a stable pass in count-bounded batches with one delta/clock (conflict: %s)', async conflict => {
