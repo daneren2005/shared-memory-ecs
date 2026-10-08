@@ -189,6 +189,11 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
   `init` in its constructor and the worker answers `init-complete`. `system.finishLoading()` then posts `load`
   carrying `getInitData()`'s result; the worker runs `updateFunction.init` and answers `loaded`. `world.init()`
   awaits both in order, and `world.load()` re-runs `finishLoading` so a reused world re-seeds its workers.
+  Worker `error`/`messageerror` events log the system name and reject `init()` on startup failure, including
+  failures received before `init()` is called. `createEntitySystemWorker` also listens for worker-global
+  `unhandledrejection` events (when the scope supports `addEventListener`) and forwards a cloneable Error in
+  an `unhandled-rejection` message. The main thread logs it with the system name and rejects pending startup.
+  Rejections after startup are logged; they do not settle loading or run-completion promises.
 - **Constant strings (entity identity):** `entity.type` and `entity.class` are interned once per distinct value
   into the heap as immutable, lockless `ConstantString`s, and the entity block stores only their pointers at
   `TYPE_INDEX`/`CLASS_INDEX`. N entities of one type or class share one allocation. A real worker gets the heap's

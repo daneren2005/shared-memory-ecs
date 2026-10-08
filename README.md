@@ -612,6 +612,11 @@ createSystemWorker(self, spawnerUpdate, registry);
 The run function may carry the same `init` / `queryChanged` / `entityRemoved` hooks as an `updateFunction`. Everything else —
 callbacks, worker fallback, off-thread creation — behaves exactly as an `EntityWorkerSystem`.
 
+The worker helpers report unhandled promise rejections on the main thread with the system name,
+preserving the error message and stack. Rejections before the startup handshake completes reject
+`system.init()`; later rejections are logged. Custom worker scopes can provide
+`addEventListener('unhandledrejection', listener)` to enable this reporting.
+
 ### Importing in workers
 
 Each worker entry file is bundled on its own, and a single-entry bundle cannot tree-shake this package's

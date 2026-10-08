@@ -19,6 +19,7 @@ import EntityWorkBatchState from './entity-work-batch';
 export interface EntitySystemWorkerScope {
 	onmessage: ((e: MessageEvent) => void) | null
 	postMessage(message: EntitySystemWorkerMessage): void
+	addEventListener?(type: 'unhandledrejection', listener: (event: PromiseRejectionEvent) => void): void
 }
 
 export default function createEntitySystemWorker<
@@ -27,6 +28,17 @@ export default function createEntitySystemWorker<
 	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
 >(scope: EntitySystemWorkerScope, updateFunction: EntityUpdateFunction<C, T, W, D>, definitions?: ComponentDefinitionMap) {
+	scope.addEventListener?.('unhandledrejection', event => {
+		const reason: unknown = event.reason;
+		// Copy error details without a potentially uncloneable rejection reason or cause.
+		const error = new Error(reason instanceof Error ? reason.message : String(reason));
+		if(reason instanceof Error) {
+			error.name = reason.name;
+			error.stack = reason.stack;
+		}
+		postMessageTyped(scope, { type: 'unhandled-rejection', error });
+	});
+
 	// Persistent lists, carried across runs and mutated by each run's delta (see applyQueryDelta).
 	let entities: Array<UpdateEntityConfigObject<T>> = [];
 	const workState = new EntityWorkBatchState<T, W>();

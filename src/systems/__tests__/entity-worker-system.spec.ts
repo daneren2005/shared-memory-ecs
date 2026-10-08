@@ -1,4 +1,6 @@
 import { EntityWorkerSystem, TYPE_INDEX } from '../../index';
+import createEntitySystemWorker, { type EntitySystemWorkerScope } from '../workers/create-entity-system-worker';
+import type EntitySystemWorkerMessage from '../workers/entity-system-worker-message';
 import type { BaseEntity, EntityWorkerSystemQuery, System } from '../../index';
 import { createTestWorld, type ComponentArrays, type Components, type TestWorld } from '../../__tests__/fixtures/components';
 import { eidsOf, listOf } from '../../__tests__/fixtures/entity-collections';
@@ -29,6 +31,7 @@ type Mode = 'main-thread' | 'worker';
 const MODES: Array<Mode> = ['main-thread', 'worker'];
 
 interface StubOptions {
+	getWorker?: () => Worker
 	required: Array<keyof Components>
 	not?: Array<keyof Components>
 	queries?: { [key: string]: EntityWorkerSystemQuery<Components> }
@@ -771,6 +774,93 @@ describe.each(MODES)('entity-worker-system (%s)', (mode) => {
 				expect(errors[0].phase).toEqual('preRun');
 			});
 		});
+	});
+});
+
+describe('worker startup failures', () => {
+	let system: StubSystem;
+	beforeEach(() => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		const worker: Pick<Worker, 'onmessage' | 'onerror' | 'onmessageerror' | 'postMessage' | 'terminate'> = {
+			onmessage: null,
+			onerror: null,
+			onmessageerror: null,
+			postMessage: vi.fn<(message: unknown) => void>(),
+			terminate: vi.fn<() => void>(),
+		};
+		system = new StubSystem(createTestWorld(), 'worker', { required: [], getWorker: () => worker as Worker });
+	});
+	afterEach(() => {
+		system.destroy();
+		vi.restoreAllMocks();
+	});
+
+	it.each([
+		{ reason: new TypeError('Missing dependency', { cause: () => {} }), message: 'Missing dependency', timing: 'during init' },
+		{ reason: 'Dynamic import failed', message: 'Dynamic import failed', timing: 'during init' },
+		{ reason: { callback: () => {} }, message: '[object Object]', timing: 'during init' },
+		{ reason: undefined, message: 'undefined', timing: 'before init' },
+		{ reason: new Error('Async task failed'), message: 'Async task failed', timing: 'after init' },
+	])('forwards rejection "$message" received $timing', async ({ reason, message, timing }) => {
+		const worker = system.worker as Worker;
+		if(timing === 'after init') {
+			worker.onmessage?.(new MessageEvent('message', { data: { type: 'init-complete' } }));
+		}
+		const promise = timing === 'during init' ? system.init() : undefined;
+		let listener: ((event: PromiseRejectionEvent) => void) | undefined;
+		let forwarded: EntitySystemWorkerMessage | undefined;
+		const scope: EntitySystemWorkerScope = {
+			onmessage: null,
+			addEventListener: (type, handler) => {
+				expect(type).toBe('unhandledrejection');
+				listener = handler;
+			},
+			postMessage: data => {
+				forwarded = structuredClone(data);
+				worker.onmessage?.(new MessageEvent('message', { data: forwarded }));
+			},
+		};
+		createEntitySystemWorker<Components, {}>(scope, () => {});
+		expect(listener).toBeTypeOf('function');
+		listener?.(Object.assign(new Event('unhandledrejection'), { reason, promise: Promise.resolve() }));
+
+		expect(forwarded).toEqual({ type: 'unhandled-rejection', error: expect.objectContaining({ message }) });
+		if(reason instanceof Error && forwarded?.type === 'unhandled-rejection') {
+			expect(forwarded.error.name).toBe(reason.name);
+			expect(forwarded.error.stack).toBe(reason.stack);
+			expect(forwarded.error.cause).toBeUndefined();
+		}
+		expect(console.error).toHaveBeenCalledWith(
+			expect.objectContaining({ message: 'Worker StubSystem had an unhandled promise rejection', cause: expect.objectContaining({ message }) }),
+			expect.objectContaining({ message }),
+		);
+		if(timing === 'after init') {
+			expect(system.init()).toBeUndefined();
+		} else {
+			await expect(promise ?? system.init()).rejects.toThrow('Worker StubSystem had an unhandled promise rejection');
+			await expect(system.init()).rejects.toThrow('Worker StubSystem had an unhandled promise rejection');
+		}
+	});
+	it.each([
+		['error', 'before init'],
+		['error', 'during init'],
+		['messageerror', 'before init'],
+		['messageerror', 'during init'],
+	])('rejects and logs %s received %s', async (type, timing) => {
+		const promise = timing === 'during init' ? system.init() : undefined;
+		const worker = system.worker as Worker;
+		const event = type === 'error'
+			? Object.assign(new Event('error'), { message: 'Failed to load worker dependency', error: new Error('Missing dependency'), filename: '', lineno: 0, colno: 0 })
+			: new MessageEvent('messageerror');
+		if(event instanceof MessageEvent) {
+			worker.onmessageerror?.(event);
+		} else {
+			worker.onerror?.(event);
+		}
+
+		await expect(promise ?? system.init()).rejects.toThrow('Worker StubSystem failed to load');
+		await expect(system.init()).rejects.toThrow('Worker StubSystem failed to load');
+		expect(console.error).toHaveBeenCalledWith(expect.objectContaining({ message: 'Worker StubSystem failed to load', cause: event }), event);
 	});
 });
 

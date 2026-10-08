@@ -7,6 +7,11 @@ interface InitMessage {
 	type: 'init'
 }
 
+interface UnhandledRejectionMessage {
+	type: 'unhandled-rejection'
+	error: Error
+}
+
 interface InitCompleteMessage {
 	type: 'init-complete'
 }
@@ -95,5 +100,6 @@ interface EntityEventsMessage {
 }
 
 type EntitySystemWorkerMessage<W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> =
-	InitMessage | InitCompleteMessage | LoadMessage<D> | LoadedMessage | ResetMessage | GrowBufferMessage | GrowBufferFromWorkerMessage | RunUpdateMessage<W> | EntityEventsMessage;
+	InitMessage | InitCompleteMessage | UnhandledRejectionMessage | LoadMessage<D> | LoadedMessage | ResetMessage
+	| GrowBufferMessage | GrowBufferFromWorkerMessage | RunUpdateMessage<W> | EntityEventsMessage;
 export default EntitySystemWorkerMessage;

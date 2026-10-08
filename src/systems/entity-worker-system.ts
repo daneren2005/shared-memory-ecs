@@ -27,7 +27,8 @@ export default abstract class EntityWorkerSystem<
 	isWorkerThread: boolean;
 
 	private initialized = false;
-	private initPromise: Resolvable | null = null;
+	private initPromise: PromiseWithResolvers<void> | null = null;
+	private initError: Error | null = null;
 	private loadingPromise: Resolvable | null = null;
 	private runCompletePromise: Resolvable | null = null;
 	private isRunning = false;
@@ -82,9 +83,26 @@ export default abstract class EntityWorkerSystem<
 	}
 
 	private initWorker() {
+		const onWorkerError = (error: Error) => {
+			console.error(error, error.cause);
+			if(!this.initialized) {
+				this.initError = error;
+				this.initPromise?.reject(error);
+			}
+		};
+		if(!(this.worker instanceof EntitySystemWebWorker)) {
+			const onErrorEvent = (event: ErrorEvent | MessageEvent) => {
+				onWorkerError(new Error(`Worker ${this.name} failed to load`, { cause: event }));
+			};
+			this.worker.onerror = onErrorEvent;
+			this.worker.onmessageerror = onErrorEvent;
+		}
+
 		this.worker.onmessage = (e: MessageEvent) => {
 			let message = e.data as EntitySystemWorkerMessage;
-			if(message.type === 'init-complete') {
+			if(message.type === 'unhandled-rejection') {
+				onWorkerError(new Error(`Worker ${this.name} had an unhandled promise rejection`, { cause: message.error }));
+			} else if(message.type === 'init-complete') {
 				this.initialized = true;
 				if(this.initPromise) {
 					this.initPromise.resolve();
@@ -241,18 +259,17 @@ export default abstract class EntityWorkerSystem<
 	}
 
 	init(): Promise<void> | void {
+		if(this.initError) {
+			return Promise.reject(this.initError);
+		}
 		if(this.initialized) {
 			return;
 		} else if(this.initPromise) {
 			return this.initPromise.promise;
 		}
 
-		let { promise, resolve } = Promise.withResolvers<void>();
-		this.initPromise = {
-			promise,
-			resolve,
-		};
-		return promise;
+		this.initPromise = Promise.withResolvers<void>();
+		return this.initPromise.promise;
 	}
 
 	// Sends the init data over and runs the update function's own init in the worker
