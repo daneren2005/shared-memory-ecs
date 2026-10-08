@@ -2,6 +2,7 @@ import { EventEmitter } from 'eventemitter3';
 import type BaseWorld from './world';
 import type { ComponentDefinitionMap, ComponentMap } from './component-definition';
 import type System from './systems/system';
+import type { EntityWorkBatch } from './systems/workers/entity-system-worker-message';
 
 export const DEFAULT_TICKS_BETWEEN_UPDATES = 1_000;
 
@@ -32,10 +33,12 @@ export interface PerformanceTimingOptions {
 interface SystemTiming {
 	run: Array<number>
 	events: Array<number>
+	pendingRun: number
+	pendingEvents: number
 	// -1 when no run is being dispatched.
 	eventStart: number
-	onRunFinished: (runTime: number) => void
-	onEventsFinished: () => void
+	onRunFinished: (runTime: number, batch?: Pick<EntityWorkBatch, 'first' | 'last'>) => void
+	onEventsFinished: (runTime: number, batch?: Pick<EntityWorkBatch, 'first' | 'last'>) => void
 }
 
 const EMPTY_TIMING: TimingStats = { avg: 0, min: 0, max: 0, samples: 0 };
@@ -110,6 +113,8 @@ export default class PerformanceTiming<C extends ComponentMap = ComponentMap> ex
 			timing.run = [];
 			timing.events = [];
 			timing.eventStart = -1;
+			timing.pendingRun = 0;
+			timing.pendingEvents = 0;
 		});
 		this.stats = {
 			update: { ...EMPTY_TIMING },
@@ -168,16 +173,30 @@ export default class PerformanceTiming<C extends ComponentMap = ComponentMap> ex
 			run: [],
 			events: [],
 			eventStart: -1,
-			onRunFinished: (runTime: number) => {
-				timing.run.push(runTime);
+			pendingRun: 0,
+			pendingEvents: 0,
+			onRunFinished: (runTime, batch) => {
+				if(!batch || batch.first) {
+					timing.pendingRun = 0;
+					timing.pendingEvents = 0;
+				}
+				timing.pendingRun += runTime;
+				if(!batch || batch.last) {
+					timing.run.push(timing.pendingRun);
+					timing.pendingRun = 0;
+				}
 				timing.eventStart = performance.now();
 			},
-			onEventsFinished: () => {
+			onEventsFinished: (_runTime, batch) => {
 				if(timing.eventStart < 0) {
 					return;
 				}
 
-				timing.events.push(performance.now() - timing.eventStart);
+				timing.pendingEvents += performance.now() - timing.eventStart;
+				if(!batch || batch.last) {
+					timing.events.push(timing.pendingEvents);
+					timing.pendingEvents = 0;
+				}
 				timing.eventStart = -1;
 			},
 		};

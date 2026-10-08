@@ -938,9 +938,10 @@ Every entry is an `{ avg, min, max, samples }` over the window just closed:
 - `stats.update` - one whole `world.update` call on the thread the world lives on.
 - `stats.systems[]` - per system, in run order: `run` is the run itself on its worker, as the worker measured
   it, and `events` is what handling that run's results (the events it reported onto entities, the entities it
-  asked to be created) cost back on the calling thread. A system running on the main-thread fallback never
-  reports either, so it sits at zero with `samples: 0` - which is what tells it apart from one that genuinely
-  cost nothing.
+  asked to be created) cost back on the calling thread. Both worker and main-thread fallback runs report
+  these timings. For `workBatchSize`, one sample sums all batches in a complete pass: batches taking 3, 5,
+  and 4 ms report a 12 ms run with `samples: 1`. Event handling is summed across the pass too; gaps between
+  batches are excluded. Failed preparation closes the attempt with the time spent so far.
 - `stats.events` - every system's event handling added together. Workers finish on their own schedule rather
   than on a frame boundary, so there is no per-frame combined sample to take; these are the per-system figures
   summed at the end of the window, giving what a run of every system costs the main thread between them.
@@ -948,8 +949,9 @@ Every entry is an `{ avg, min, max, samples }` over the window just closed:
 To coordinate reporting with an external clock, construct with `{ autoUpdate: false }` and call
 `timing.flush()` at each reporting boundary. It publishes and returns a snapshot of all collected update,
 worker, and event samples, then starts a fresh window. This also works while paused: windows without work
-report zeroes. Worker results belong to the window in which they arrive. Automatic reporting remains
-enabled by default.
+report zeroes. A batched pass retains its partial totals across reporting boundaries and contributes
+one sample when its final batch arrives (event timing completes when its results are handled). Clear/reload
+drops unfinished passes, and the next pass starts fresh totals. Automatic reporting remains enabled by default.
 
 `getSystemStats(name)` pulls one system out of the latest snapshot, `reset()` throws away everything collected
 so far (worth doing after loading a new scene, when the samples either side are not comparable), and

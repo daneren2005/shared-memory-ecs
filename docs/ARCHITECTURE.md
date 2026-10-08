@@ -37,7 +37,7 @@ Run type-check and lint after every edit (AGENTS.md).
 | `component-definition.ts` | All the component/registry types: `ComponentDefinition` — a component is built in two required halves, `toBlock(config, entity?)` (worker-safe config→block-values map) + `attach(entity, memory, index, config?)` (accessor over that block); loading is `attach(entity, memory, memory.create(toBlock(config)), config)`, and a worker calls only `toBlock`. `config` lets `attach` seed main-thread-only state kept off the block; adoption passes none. Plus the optional `free(component)` teardown hook, `save(component)`, and `died(component, entity, world)` (fires once on the main thread when the entity dies, before its blocks are freed — see Entity death). `BaseComponent`, `ComponentMap`, `ComponentRegistry`, `RegisteredComponentDefinition`, and the derivations `ComponentsOf` (from `attach`'s return, intersected with `BaseComponent`) / `EntityConfigOf` that infer `C`/`Cfg` from a registry. |
 | `component.ts` | `Component<T>` base class an `attach` returns (`new YourComponent(block, index)`): holds `block`/`index` fields, subclass adds prototype get/set over `this.block`. One shared hidden class per component type keeps reads monomorphic/inlinable and construction a single allocation (vs a closure per accessor). `attach` may still return a plain object; the entity layer fills in `block` either way. |
 | `memory-component.ts` | `MemoryComponent`: a pool of same-sized blocks in the heap (`create`/`getBlock`/`get`/`set`/`delete`/`clear`). Backed by a `SharedPool` (all bookkeeping in the heap), so a worker can reconstruct a handle over the same pool (`MemoryComponent.fromSharedMemory` / owner's `getSharedMemory()`) and allocate/read blocks off-thread — lockless except a spin-lock guarding rare chunk growth. Backing type is `ComponentTypedArray`. |
-| `performance-timing.ts` | `PerformanceTiming`: hooks world events, emits `stats-updated` snapshots (`update` / per-system `run`+`events` / `events`). Non-invasive. `autoUpdate: false` plus public `flush()` lets an external reporting clock close all timing windows together, including while paused. |
+| `performance-timing.ts` | `PerformanceTiming`: hooks world events, emits `stats-updated` snapshots (`update` / per-system `run`+`events` / `events`). Accumulates batched worker computation and effect times into one sample per pass, retaining partial totals across flushes. Non-invasive. `autoUpdate: false` plus public `flush()` lets an external reporting clock close all timing windows together, including while paused. |
 
 ### Systems (`src/systems/`)
 
@@ -66,7 +66,11 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
 The main thread snapshots entity wrappers in insertion order and advances a fixed number
 of positions per scheduled update, skipping removed members and deferring additions.
 Each batch completes and publishes independently, releasing conflict dependencies before
-the rest of the pass. Its original logical clock, delta and injected data stay fixed;
+the rest of the pass. Worker timing events retain per-batch delivery and carry optional
+`{ first, last }` metadata as their second argument; preparation failure closes the attempt.
+`PerformanceTiming` sums these into one computation/effect sample per completed pass or
+failed attempt, excluding gaps between batches. Clear drops the snapshot and the next
+pass starts fresh timing totals. Its original logical clock, delta and injected data stay fixed;
 continuation update deltas accumulate toward the next pass. `isCurrentlyRunning()` and
 `waitForRunToComplete()` describe the active batch, not unqueued pass work. Pausing drains
 queued batches only; clear drops the snapshot. Whole-query preparation remains unbounded.

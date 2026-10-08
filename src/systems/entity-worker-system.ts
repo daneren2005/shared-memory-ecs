@@ -6,6 +6,7 @@ import type { BaseComponent, ComponentDefinitionMap, ComponentMap } from '../com
 import type { ComponentTypedArray } from '../memory-component';
 import System, { forEachInMatchingGroups, type EntityBatch, type SystemConfig } from './system';
 import type EntitySystemWorkerMessage from './workers/entity-system-worker-message';
+import type { EntityWorkBatch } from './workers/entity-system-worker-message';
 import EntitySystemWebWorker from './workers/entity-system-web-worker';
 import type { SchedulerEffects } from '../scheduling/scheduler';
 
@@ -33,6 +34,7 @@ export default abstract class EntityWorkerSystem<
 	private runCompletePromise: Resolvable | null = null;
 	private isRunning = false;
 	private workPass: { entities: Array<BaseEntity<C>>, cursor: number, elapsedTime: number, gameTime: number } | undefined;
+	private timingBatch: Pick<EntityWorkBatch, 'first' | 'last'> | undefined;
 	private pendingEffects: SchedulerEffects | undefined;
 	private completeEffects: ((effects: SchedulerEffects) => void) | undefined;
 	// Bumped by clear(); checked on each event to make certain we are dealing with the correct world
@@ -124,15 +126,16 @@ export default abstract class EntityWorkerSystem<
 					}
 					return;
 				}
+				const timingBatch = this.timingBatch && { ...this.timingBatch, last: this.timingBatch.last || !!message.workFailed };
 				if(message.workFailed) {
 					this.workPass = undefined;
 				}
 
 				if(!this.completeEffects) {
-					this.applyWorkerEffects(message);
+					this.applyWorkerEffects(message, true, timingBatch);
 					return;
 				}
-				this.world.emit(`system-${this.name}-worker-finished`, message.runTime);
+				this.world.emit(`system-${this.name}-worker-finished`, message.runTime, timingBatch);
 				const generation = this.generation;
 				let settled = false;
 				const finish = () => {
@@ -153,7 +156,7 @@ export default abstract class EntityWorkerSystem<
 						settled = true;
 						this.pendingEffects = undefined;
 						try {
-							this.applyWorkerEffects(message, false);
+							this.applyWorkerEffects(message, false, timingBatch);
 						} catch(error) {
 							this.onError(error as Error, { phase: 'run' });
 							this.world.notifySystemRunCompleted(this);
@@ -182,10 +185,10 @@ export default abstract class EntityWorkerSystem<
 		this.worker.postMessage(message);
 	}
 
-	private applyWorkerEffects(message: WorkerRunCompletion, emitWorkerFinished = true): void {
+	private applyWorkerEffects(message: WorkerRunCompletion, emitWorkerFinished: boolean, timingBatch: Pick<EntityWorkBatch, 'first' | 'last'> | undefined): void {
 		this.isRunning = false;
 		if(emitWorkerFinished) {
-			this.world.emit(`system-${this.name}-worker-finished`, message.runTime);
+			this.world.emit(`system-${this.name}-worker-finished`, message.runTime, timingBatch);
 		}
 
 		// User-code errors caught inside the run: log + emit on the main thread, one per failure.
@@ -236,7 +239,7 @@ export default abstract class EntityWorkerSystem<
 			this.world.adoptEntity(descriptor);
 		});
 
-		this.world.emit(`system-${this.name}-worker-events-finished`, message.runTime);
+		this.world.emit(`system-${this.name}-worker-events-finished`, message.runTime, timingBatch);
 		this.world.notifySystemRunCompleted(this);
 
 		if(this.runCompletePromise) {
@@ -315,6 +318,7 @@ export default abstract class EntityWorkerSystem<
 		Object.values(this.queryEntities).forEach(list => list.clear());
 		this.queryDeltas = {};
 		this.workPass = undefined;
+		this.timingBatch = undefined;
 
 		const message: EntitySystemWorkerMessage = { type: 'reset' };
 		this.worker.postMessage(message);
@@ -411,6 +415,7 @@ export default abstract class EntityWorkerSystem<
 			this.addDataToWorld?.(world);
 		}
 
+		this.timingBatch = workBatch && { first: workBatch.first, last: workBatch.last };
 		this.isRunning = true;
 		this.completeEffects = this.world.scheduler.prepareEffects?.(this.world, this);
 		let entities = this.buildQueryDelta(MAIN_QUERY_NAME, this.options);

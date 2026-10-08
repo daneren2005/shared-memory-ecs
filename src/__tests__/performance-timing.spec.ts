@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import { PerformanceTiming, System } from '../index';
 import type { PerformanceStats } from '../index';
+import type { EntityWorkBatch } from '../systems/workers/entity-system-worker-message';
 import { createTestWorld, type Components, type TestWorld } from './fixtures/components';
 
 // performance.now() is driven by hand: each call shifts the next entry off `clock`, so a test can dictate
@@ -15,6 +16,56 @@ afterEach(() => {
 });
 
 describe('performance timing', () => {
+	it('reports a complete batched pass as one sample across reporting windows', () => {
+		const world = createTestWorld();
+		world.addSystem(new NoopSystem(world, 'batched'));
+		world.addSystem(new NoopSystem(world, 'other'));
+		const timing = new PerformanceTiming(world, { autoUpdate: false });
+
+		emitRun(world, 'batched', 3, 1, { first: true, last: false });
+		emitRun(world, 'other', 7, 2);
+		let stats = timing.flush();
+		expect(stats.systems[0].run.samples).toBe(0);
+		expect(stats.systems[0].events.samples).toBe(0);
+		expect(stats.systems[1].run.avg).toBe(7);
+
+		emitRun(world, 'batched', 5, 2, { first: false, last: false });
+		stats = timing.flush();
+		expect(stats.systems[0].run.samples).toBe(0);
+		expect(stats.systems[0].events.samples).toBe(0);
+
+		emitRun(world, 'batched', 4, 3, { first: false, last: true });
+		stats = timing.flush();
+		expect(stats.systems[0].run).toEqual({ avg: 12, min: 12, max: 12, samples: 1 });
+		expect(stats.systems[0].events).toEqual({ avg: 6, min: 6, max: 6, samples: 1 });
+		expect(stats.events).toEqual(stats.systems[0].events);
+
+		emitRun(world, 'batched', 8, 4, { first: true, last: false });
+		emitRun(world, 'batched', 2, 1, { first: false, last: true });
+		emitRun(world, 'batched', 6, 2, { first: true, last: true });
+		stats = timing.flush();
+		expect(stats.systems[0].run).toEqual({ avg: 8, min: 6, max: 10, samples: 2 });
+		expect(stats.systems[0].events).toEqual({ avg: 3.5, min: 2, max: 5, samples: 2 });
+	});
+
+	it('drops partial totals on reset and when a new pass replaces an abandoned pass', () => {
+		const world = createTestWorld();
+		world.addSystem(new NoopSystem(world, 'batched'));
+		const timing = new PerformanceTiming(world, { autoUpdate: false });
+		emitRun(world, 'batched', 3, 1, { first: true, last: false });
+		timing.reset();
+		emitRun(world, 'batched', 5, 2, { first: false, last: true });
+		let stats = timing.flush();
+		expect(stats.systems[0].run.avg).toBe(5);
+		expect(stats.systems[0].events.avg).toBe(2);
+
+		emitRun(world, 'batched', 20, 10, { first: true, last: false });
+		emitRun(world, 'batched', 4, 3, { first: true, last: true });
+		stats = timing.flush();
+		expect(stats.systems[0].run).toEqual({ avg: 4, min: 4, max: 4, samples: 1 });
+		expect(stats.systems[0].events).toEqual({ avg: 3, min: 3, max: 3, samples: 1 });
+	});
+
 	it('flushes every timing on an external reporting boundary, including while paused', () => {
 		const world = createTestWorld();
 		world.addSystem(new NoopSystem(world, 'first'));
@@ -226,10 +277,10 @@ describe('performance timing', () => {
 
 // Fakes one worker run of `name` (taking `runTime`) whose events then take `eventTime`, via the same events
 // EntityWorkerSystem emits around a dispatch.
-function emitRun(world: TestWorld, name: string, runTime: number, eventTime: number) {
+function emitRun(world: TestWorld, name: string, runTime: number, eventTime: number, batch?: Pick<EntityWorkBatch, 'first' | 'last'>) {
 	clock.unshift(0, eventTime);
-	world.emit(`system-${name}-worker-finished`, runTime);
-	world.emit(`system-${name}-worker-events-finished`, runTime);
+	world.emit(`system-${name}-worker-finished`, runTime, batch);
+	world.emit(`system-${name}-worker-events-finished`, runTime, batch);
 }
 
 class NoopSystem extends System<Components> {

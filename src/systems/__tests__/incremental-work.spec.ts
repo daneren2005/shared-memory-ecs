@@ -1,4 +1,4 @@
-import { BaseWorld, ConflictScheduler, DefaultScheduler, EntityWorkerSystem, System } from '../../index';
+import { BaseWorld, ConflictScheduler, DefaultScheduler, EntityWorkerSystem, PerformanceTiming, System } from '../../index';
 import { registry, type Components, type TestWorld } from '../../__tests__/fixtures/components';
 import { incrementalUpdate, type IncrementalWorld } from '../../__tests__/fixtures/incremental-update';
 
@@ -57,6 +57,24 @@ describe.each([true, false])('incremental work (fallback: %s)', forceMainThread 
 		expect(visits.at(-1)?.slice(1, 4)).toEqual([100, 200, 200]);
 	});
 
+	it.each([true, false])('groups timing for a whole pass (conflict: %s)', async conflict => {
+		const { system } = await setup(2, false, conflict);
+		const timing = new PerformanceTiming(world, { autoUpdate: false });
+		const durations: Array<number> = [];
+		world.on('system-Incremental-worker-finished', (duration: number) => durations.push(duration));
+		await step(system, 100);
+		expect(timing.flush().systems[0].run.samples).toBe(0);
+		await step(system, 10);
+		expect(timing.flush().systems[0].events.samples).toBe(0);
+		await step(system, 20);
+		const stats = timing.flush().systems[0];
+		const total = durations.reduce((sum, duration) => sum + duration, 0);
+		expect(durations).toHaveLength(3);
+		expect(stats.run).toEqual({ avg: total, min: total, max: total, samples: 1 });
+		expect(stats.events.samples).toBe(1);
+		timing.destroy();
+	});
+
 	it('releases a conflicting system after each batch, before the pass finishes', async () => {
 		const { system, entities } = await setup();
 		const totals: Array<number> = [];
@@ -108,11 +126,16 @@ describe.each([true, false])('incremental work (fallback: %s)', forceMainThread 
 	it.each(['preRun', 'preBatch'])('abandons the remaining pass after %s fails', async phase => {
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		const { system, entities } = await setup(2, phase === 'preRun' ? true : 'preBatch');
+		const timing = new PerformanceTiming(world, { autoUpdate: false });
 		const errors: Array<string> = [];
 		world.on('system-error', (event: { phase: string }) => errors.push(event.phase));
 		await step(system, 100);
 		await step(system, 16);
 		expect(errors).toEqual([phase]);
+		const stats = timing.flush().systems[0];
+		expect(stats.run.samples).toBe(1);
+		expect(stats.events.samples).toBe(1);
+		timing.destroy();
 		expect(entities.map(entity => entity.components.health?.health)).toEqual([1000, 1000, 1000, 1000, 1000]);
 		await step(system, 84);
 		expect(entities.map(entity => entity.components.health?.health)).toEqual([900, 900, 1000, 1000, 1000]);
@@ -131,13 +154,17 @@ describe.each([true, false])('incremental work (fallback: %s)', forceMainThread 
 
 	it('drops the pass and worker-local preparation on clear', async () => {
 		const { system } = await setup();
+		const timing = new PerformanceTiming(world, { autoUpdate: false });
 		await step(system, 100);
+		expect(timing.flush().systems[0].run.samples).toBe(0);
 		await world.clear();
 		const entity = world.loadEntity({ maxHealth: 1000 });
 		await world.init();
 		await step(system, 100);
 		expect(entity.components.health?.health).toBe(900);
 		expect(system.isCurrentlyRunning()).toBe(false);
+		expect(timing.flush().systems[0].run.samples).toBe(1);
+		timing.destroy();
 	});
 });
 
