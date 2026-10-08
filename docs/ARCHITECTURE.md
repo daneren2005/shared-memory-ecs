@@ -41,7 +41,7 @@ Run type-check and lint after every edit (AGENTS.md).
 
 ### Systems (`src/systems/`)
 
-Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem` extends `IterableSystem` too;
+Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem` extends `System`;
 `WorkerSystem` extends `EntityWorkerSystem`.
 
 | File | Responsibility |
@@ -61,6 +61,23 @@ Hierarchy: `System` → `IterableSystem` → `EntitySystem`; `EntityWorkerSystem
 | `conflict-scheduler.ts` | Opt-in `ConflictScheduler<C>`: caches access declarations and frozen public `ConflictSchedule<C>` (`order`/`batches` describe dependency levels, not runtime barriers). Each host update queues one node per system with its delta and logical time. Per-component mutation frontiers, creation/reader tails keyed by access snapshot, per-system tails, and an exclusive tail connect conflicts in host-update/registration order, including pending work across frames. A ready queue dispatches independent nodes without waiting for whole batches or updates. Applied completion releases dependents and pumps them in a generation-guarded microtask after worker promises settle, including while paused. Sliced continuations advance at most once per host update while unpaused; during pause, generation-guarded timer tasks continue only active iterable slices until queued work drains, with zero extra delta and no worker polling. Queued nodes retain access snapshots across rebuilds; additions join future updates and removed pending nodes skip after dependencies settle. Missing declarations, boolean creation capabilities, and component-addition workers remain exclusive. Component-list creators have separate execution and publication dependencies: compatible allocation runs overlap, while effects wait for earlier matching membership readers, writers, and creators. A creation bound affects a built-in query only if it can supply every required component; explicit reads and writes remain component-level conflicts. Separate access snapshots prevent an unrelated later creator/reader from hiding older matching work across rebuilds. Captured completion handlers reject old scheduler generations. No fixed-tick engine. |
 
 ### Workers (`src/systems/workers/`) and actions (`src/actions/`)
+
+`EntityWorkerSystemConfig.workBatchSize` opts into deterministic incremental passes.
+The main thread snapshots entity wrappers in insertion order and advances a fixed number
+of positions per scheduled update, skipping removed members and deferring additions.
+Each batch completes and publishes independently, releasing conflict dependencies before
+the rest of the pass. Its original logical clock, delta and injected data stay fixed;
+continuation update deltas accumulate toward the next pass. `isCurrentlyRunning()` and
+`waitForRunToComplete()` describe the active batch, not unqueued pass work. Pausing drains
+queued batches only; clear drops the snapshot. Whole-query preparation remains unbounded.
+
+`workers/entity-work-batch.ts` shares batch selection and pass-world retention between
+the real worker and fallback. `preRun` runs once with the full entity list; `preBatch`
+runs before every batch with the selected entities. Query deltas refresh block bundles
+and named queries per batch. Preparation errors abandon the remaining pass. Opted-in
+update functions must tolerate interleaved system writes, refresh live state in `preBatch`,
+and avoid retaining component blocks across batch boundaries. WorkerSystem has no main
+entity pass and does not expose this option. Unsliced defaults are unchanged.
 
 | File | Responsibility |
 | --- | --- |

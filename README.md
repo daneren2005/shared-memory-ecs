@@ -375,7 +375,8 @@ Schedulers without these hooks retain immediate application and the existing cle
 
 This scheduler provides component conflict ordering with the existing synchronous update API. It does
 not implement fixed simulation ticks or impose a stable order on unrelated workers' callbacks.
-World clocks continue advancing with host updates, and slicing continues to use wall-clock budgets.
+World clocks continue advancing with host updates. Iterable slicing uses wall-clock budgets;
+entity workers can opt into deterministic work batches instead.
 For a fixed input-update sequence, declared conflicting operations and each system's deltas/logical
 times remain ordered independently of worker completion order. Independent callbacks and timing events
 can arrive in different orders; shared effects must be declared as conflicts or marked exclusive.
@@ -461,7 +462,37 @@ class DamageSystem extends EntityWorkerSystem<Components, { health: Int32Array }
 }
 ```
 
-### Update-function hooks: `init`, `queryChanged` and `preRun`
+### Incremental entity work
+
+Set `workBatchSize: 1024` in an `EntityWorkerSystem` configuration to process at most
+1,024 snapshot positions per scheduled update. The size must be a positive safe integer.
+Batch boundaries depend on entity count and insertion order, never elapsed wall time.
+The last batch can be smaller, and removed entities consume their original positions without
+being updated. New members wait for the next pass; current component bundles and named queries
+are refreshed before every batch.
+
+`deltaBetweenRuns` starts each full pass. All its batches share the original `elapsedTime`,
+logical `gameTime`, and data from `addDataToWorld()`. Delta accumulated during the pass is
+carried toward the next pass. `preRun` receives the full current entity list once at the
+start, while optional `preBatch` receives only the selected entities before each batch.
+Worker-local fields assigned to `world` survive until the pass ends. `queryChanged` and
+`entityRemoved` still receive each batch's membership changes.
+
+Each batch publishes callbacks, creations and component changes independently. Under
+`ConflictScheduler`, its applied completion releases conflicting systems, allowing physics
+or other frequent work between batches. Access declarations must cover both hooks and
+entity updates. This opt-in permits other systems to change shared state between batches;
+use `preBatch` to refresh live indexes and avoid retaining component block references across
+batch boundaries. A failed preparation hook abandons the remaining pass. Clear/reload drops
+the pending snapshot and worker-local pass state.
+
+This also works with `DefaultScheduler` and the main-thread fallback. It does not apply to
+`WorkerSystem`, whose function runs once over named queries. Full-query preparation and
+query-delta handling remain unbounded, so a count limit alone cannot guarantee a frame deadline.
+Paused conflict scheduling drains queued batches; unqueued pass work resumes with future
+host updates. `waitForRunToComplete()` waits for the active batch and its publication.
+
+### Update-function hooks: `init`, `queryChanged`, `preRun` and `preBatch`
 
 `addDataToWorld` runs on the main thread and re-sends its data every run. When the data instead needs to
 *live in the worker* — computed once, or too big to ship each frame — attach hooks to the update function

@@ -1,5 +1,6 @@
 import WebWorker from './web-worker';
 import { applyQueryDelta } from './apply-query-delta';
+import EntityWorkBatchState from './entity-work-batch';
 import type EntitySystemWorkerMessage from './entity-system-worker-message';
 import type { EntityEvent, SystemEvents, WorkerRunError } from './entity-system-worker-message';
 import type BaseWorld from '../../world';
@@ -14,6 +15,7 @@ import { buildWorkerComponent, buildWorkerEntity, type WorkerCreateRegistry } fr
 export default class EntitySystemWebWorker<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> extends WebWorker {
 	private updateFunction: EntityUpdateFunction<C, T, W, D>;
 	private entities: Array<UpdateEntityConfigObject<T>> = [];
+	private workState = new EntityWorkBatchState<T, W>();
 	private queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
 	// Mirrors createEntitySystemWorker: updateFunction.init's result, merged onto `world` each run.
 	private worldExtension: Partial<W> | undefined;
@@ -52,10 +54,12 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 				type: 'loaded',
 			});
 		} else if(message.type === 'reset') {
+			this.workState.clear();
 			// Drop the persistent lists so a reused world starts empty; worldExtension is refreshed by the next load.
 			this.entities = [];
 			this.queryEntities = {};
 		} else if(message.type === 'run') {
+			message.world = this.workState.getWorld(message.world, message.workBatch);
 			if(this.worldExtension) {
 				Object.assign(message.world, this.worldExtension);
 			}
@@ -85,6 +89,7 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 			let errors: Array<WorkerRunError> = [];
 
 			this.entities = applyQueryDelta(this.entities, message.entities as QueryDelta<T>);
+			const runEntities = this.workState.getEntities(this.entities, message.entities as QueryDelta<T>, message.workBatch);
 
 			let queries: EntityQueryComponents<C> = {};
 			Object.entries(message.queries).forEach(([queryKey, delta]) => {
@@ -141,7 +146,7 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 				}
 			}
 			let preRunFailed = false;
-			if(this.updateFunction.preRun) {
+			if(this.updateFunction.preRun && (!message.workBatch || message.workBatch.first)) {
 				try {
 					this.updateFunction.preRun(message.world, this.entities, queries, callbacks);
 				} catch(e) {
@@ -150,8 +155,16 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 				}
 			}
 			// preRun sets up the run's state; if it threw, skip the entity loop rather than run over half-prepared data.
+			if(!preRunFailed && this.updateFunction.preBatch) {
+				try {
+					this.updateFunction.preBatch(message.world, runEntities, queries, callbacks);
+				} catch(e) {
+					preRunFailed = true;
+					errors.push({ error: e as Error, phase: 'preBatch' });
+				}
+			}
 			if(!preRunFailed) {
-				this.entities.forEach(entity => {
+				runEntities.forEach(entity => {
 					try {
 						this.updateFunction(message.world, entity.entityId, entity.components, queries, callbacks);
 					} catch(e) {
@@ -172,6 +185,7 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 			}
 
 			const runTime = performance.now() - start;
+			this.workState.finish(message.workBatch, preRunFailed);
 
 			this.onMessageTyped({
 				type: 'run-complete',
@@ -182,6 +196,7 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 				created: createdEntities,
 				componentChanges,
 				errors,
+				workFailed: preRunFailed,
 			});
 		}
 	}

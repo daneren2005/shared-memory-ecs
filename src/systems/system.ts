@@ -148,7 +148,7 @@ export interface SystemConfig<C extends ComponentMap = ComponentMap> {
 }
 
 // Which part of a run threw, for the `system-error` event.
-export type SystemErrorPhase = 'queryChanged' | 'preRun' | 'update' | 'entityRemoved' | 'run' | 'died';
+export type SystemErrorPhase = 'queryChanged' | 'preRun' | 'preBatch' | 'update' | 'entityRemoved' | 'run' | 'died';
 export interface SystemError {
 	system: string
 	error: Error

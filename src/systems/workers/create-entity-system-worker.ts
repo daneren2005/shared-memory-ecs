@@ -12,6 +12,7 @@ import type {
 import { buildWorkerComponent, buildWorkerEntity, type FactoryConfigs } from '../../actions/build-worker-entity';
 import type { WorkerEntityClassRegistry } from '../../entity-class';
 import { applyQueryDelta } from './apply-query-delta';
+import EntityWorkBatchState from './entity-work-batch';
 
 // The slice of the worker global scope createEntitySystemWorker touches. Passing `self` explicitly (rather than
 // using the global) lets runners like @vitest/web-worker, which inject `self` as a module local, drive it.
@@ -28,6 +29,7 @@ export default function createEntitySystemWorker<
 >(scope: EntitySystemWorkerScope, updateFunction: EntityUpdateFunction<C, T, W, D>, definitions?: ComponentDefinitionMap) {
 	// Persistent lists, carried across runs and mutated by each run's delta (see applyQueryDelta).
 	let entities: Array<UpdateEntityConfigObject<T>> = [];
+	const workState = new EntityWorkBatchState<T, W>();
 	const queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
 	// What updateFunction.init returned: persistent state (e.g. a seeded RNG) merged onto `world` each run.
 	let worldExtension: Partial<W> | undefined;
@@ -79,6 +81,7 @@ export default function createEntitySystemWorker<
 				heap.addSharedBuffer(message.buffer);
 			}
 		} else if(message.type === 'reset') {
+			workState.clear();
 			// Drop the persistent lists so a reused world starts empty; worldExtension is refreshed by the next load.
 			entities = [];
 			for(const key of Object.keys(queryEntities)) {
@@ -86,6 +89,7 @@ export default function createEntitySystemWorker<
 			}
 			worldExtension = undefined;
 		} else if(message.type === 'run') {
+			message.world = workState.getWorld(message.world, message.workBatch);
 			if(worldExtension) {
 				Object.assign(message.world, worldExtension);
 			}
@@ -112,6 +116,7 @@ export default function createEntitySystemWorker<
 			let errors: Array<WorkerRunError> = [];
 
 			entities = applyQueryDelta(entities, message.entities as QueryDelta<T>);
+			const runEntities = workState.getEntities(entities, message.entities as QueryDelta<T>, message.workBatch);
 
 			let queries: EntityQueryComponents<C> = {};
 			Object.entries(message.queries).forEach(([queryKey, delta]) => {
@@ -168,7 +173,7 @@ export default function createEntitySystemWorker<
 				}
 			}
 			let preRunFailed = false;
-			if(updateFunction.preRun) {
+			if(updateFunction.preRun && (!message.workBatch || message.workBatch.first)) {
 				try {
 					updateFunction.preRun(message.world, entities, queries, callbacks);
 				} catch(err) {
@@ -178,8 +183,16 @@ export default function createEntitySystemWorker<
 			}
 
 			// preRun sets up the run's state; if it threw, skip the entity loop rather than run over half-prepared data.
+			if(!preRunFailed && updateFunction.preBatch) {
+				try {
+					updateFunction.preBatch(message.world, runEntities, queries, callbacks);
+				} catch(err) {
+					preRunFailed = true;
+					errors.push({ error: err as Error, phase: 'preBatch' });
+				}
+			}
 			if(!preRunFailed) {
-				entities.forEach(entity => {
+				runEntities.forEach(entity => {
 					try {
 						updateFunction(message.world, entity.entityId, entity.components, queries, callbacks);
 					} catch(err) {
@@ -199,6 +212,7 @@ export default function createEntitySystemWorker<
 				});
 			}
 			const runTime = performance.now() - start;
+			workState.finish(message.workBatch, preRunFailed);
 
 			postMessageTyped(scope, {
 				type: 'run-complete',
@@ -209,6 +223,7 @@ export default function createEntitySystemWorker<
 				created: createdEntities,
 				componentChanges,
 				errors,
+				workFailed: preRunFailed,
 			});
 		}
 	};

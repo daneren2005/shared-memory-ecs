@@ -53,6 +53,13 @@ interface RunUpdateMessage<W extends EntityWorkerSystemWorld = EntityWorkerSyste
 	world: W
 	entities: QueryDelta
 	queries: { [key: string]: QueryDelta }
+	workBatch?: EntityWorkBatch
+}
+
+export interface EntityWorkBatch {
+	entityIds: Array<number>
+	first: boolean
+	last: boolean
 }
 
 // An event a worker asks the main thread to emit on an entity. Structured-cloned, so `args` must be cloneable.
@@ -66,7 +73,7 @@ export interface EntityEvent {
 // so the main thread logs it and emits `system-error`. Error is structured-cloneable across the worker boundary.
 export interface WorkerRunError {
 	error: Error
-	phase: 'queryChanged' | 'preRun' | 'update' | 'entityRemoved'
+	phase: 'queryChanged' | 'preRun' | 'preBatch' | 'update' | 'entityRemoved'
 	entityId?: number
 }
 
@@ -84,6 +91,7 @@ interface EntityEventsMessage {
 	created: Array<WorkerCreatedEntity>
 	componentChanges: Array<WorkerComponentChange>
 	errors: Array<WorkerRunError>
+	workFailed?: boolean
 }
 
 type EntitySystemWorkerMessage<W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> =

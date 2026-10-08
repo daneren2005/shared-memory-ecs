@@ -31,6 +31,7 @@ export default abstract class EntityWorkerSystem<
 	private loadingPromise: Resolvable | null = null;
 	private runCompletePromise: Resolvable | null = null;
 	private isRunning = false;
+	private workPass: { entities: Array<BaseEntity<C>>, cursor: number, elapsedTime: number, gameTime: number } | undefined;
 	private pendingEffects: SchedulerEffects | undefined;
 	private completeEffects: ((effects: SchedulerEffects) => void) | undefined;
 	// Bumped by clear(); checked on each event to make certain we are dealing with the correct world
@@ -44,6 +45,9 @@ export default abstract class EntityWorkerSystem<
 
 	constructor(world: BaseWorld<ComponentDefinitionMap, C>, options: EntityWorkerSystemConfig<C, T, W, D>) {
 		super(world, options);
+		if(options.workBatchSize !== undefined && (!Number.isSafeInteger(options.workBatchSize) || options.workBatchSize <= 0)) {
+			throw new Error('workBatchSize must be a positive safe integer');
+		}
 		this.options = options;
 		Object.keys(this.options.queries ?? {}).forEach(queryName => {
 			this.queryEntities[queryName] = new Map();
@@ -101,6 +105,9 @@ export default abstract class EntityWorkerSystem<
 						this.discardWorkerAllocations(message);
 					}
 					return;
+				}
+				if(message.workFailed) {
+					this.workPass = undefined;
 				}
 
 				if(!this.completeEffects) {
@@ -290,6 +297,7 @@ export default abstract class EntityWorkerSystem<
 		this.entities.clear();
 		Object.values(this.queryEntities).forEach(list => list.clear());
 		this.queryDeltas = {};
+		this.workPass = undefined;
 
 		const message: EntitySystemWorkerMessage = { type: 'reset' };
 		this.worker.postMessage(message);
@@ -300,6 +308,10 @@ export default abstract class EntityWorkerSystem<
 			this.currentDelta += elapsedTime;
 
 			return false;
+		} else if(this.workPass) {
+			this.currentDelta += elapsedTime;
+			this.run(this.workPass.elapsedTime);
+			return true;
 		} else {
 			return super.update(elapsedTime);
 		}
@@ -353,11 +365,34 @@ export default abstract class EntityWorkerSystem<
 		return this.runCompletePromise.promise;
 	}
 	run(elapsedTime: number): void {
+		let workBatch: Extract<EntitySystemWorkerMessage, { type: 'run' }>['workBatch'];
+		let gameTime = this.gameTime;
+		if(this.options.workBatchSize !== undefined && this.tracksMainQuery) {
+			const first = !this.workPass;
+			const pass = this.workPass ??= { entities: Array.from(this.entities.values()), cursor: 0, elapsedTime, gameTime };
+			gameTime = pass.gameTime;
+			elapsedTime = pass.elapsedTime;
+			const end = Math.min(pass.cursor + this.options.workBatchSize, pass.entities.length);
+			const entityIds: Array<number> = [];
+			for(; pass.cursor < end; pass.cursor++) {
+				const entity = pass.entities[pass.cursor];
+				if(this.entities.get(entity.eid) === entity) {
+					entityIds.push(entity.eid);
+				}
+			}
+			const last = pass.cursor === pass.entities.length;
+			workBatch = { entityIds, first, last };
+			if(last) {
+				this.workPass = undefined;
+			}
+		}
 		const world = {
-			gameTime: this.gameTime,
+			gameTime,
 			elapsedTime,
 		} as W;
-		this.addDataToWorld?.(world);
+		if(!workBatch || workBatch.first) {
+			this.addDataToWorld?.(world);
+		}
 
 		this.isRunning = true;
 		this.completeEffects = this.world.scheduler.prepareEffects?.(this.world, this);
@@ -372,6 +407,7 @@ export default abstract class EntityWorkerSystem<
 			world,
 			entities,
 			queries,
+			workBatch,
 		};
 		this.worker.postMessage(message);
 	}
@@ -521,7 +557,7 @@ export default abstract class EntityWorkerSystem<
 	}
 
 	shouldRun(): boolean {
-		return this.entities.size > 0;
+		return this.workPass !== undefined || this.entities.size > 0;
 	}
 
 	destroy() {
@@ -556,6 +592,7 @@ export type EntityUpdateFunction<
 > = EntityUpdateFunctionImpl<C, T, W> & {
 	queryChanged?: EntityQueryChangedFunction<C, W>
 	preRun?: EntityUpdatePreRunFunction<C, T, W>
+	preBatch?: EntityUpdatePreRunFunction<C, T, W>
 	entityRemoved?: EntityRemovedFunction<C, W>
 	init?: EntityUpdateInitFunction<W, D>
 };
@@ -670,6 +707,8 @@ export interface EntityWorkerSystemConfig<
 	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
 > extends SystemConfig<C>, EntityWorkerSystemQuery<C> {
+	// Each batch publishes independently; preRun and the logical delta/clock belong to the whole pass.
+	workBatchSize?: number
 	updateFunction: EntityUpdateFunction<C, T, W, D>
 	getWorker: () => Worker
 	forceMainThread?: boolean
