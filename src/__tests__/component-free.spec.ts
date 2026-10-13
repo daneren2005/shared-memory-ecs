@@ -131,11 +131,11 @@ describe('component free hook', () => {
 	it('runs free for every entity dropped on reload (no death event needed)', () => {
 		const { registry, free, blockCount } = makeRegistry();
 		const world = new BaseWorld(registry);
-		world.load({ entities: [{ type: 'x', tracked: true }, { type: 'x', tracked: true }] });
+		void world.load({ entities: [{ type: 'x', tracked: true }, { type: 'x', tracked: true }] });
 		expect(free).not.toHaveBeenCalled();
 		expect(blockCount()).toEqual(4);
 
-		world.load({ entities: [] });
+		void world.load({ entities: [] });
 		world.update(16);
 
 		expect(free).toHaveBeenCalledTimes(2);
@@ -145,7 +145,7 @@ describe('component free hook', () => {
 	it('runs free for every entity on world.clear', async () => {
 		const { registry, free, blockCount } = makeRegistry();
 		const world = new BaseWorld(registry);
-		world.load({ entities: [{ type: 'x', tracked: true }, { type: 'x', tracked: true }] });
+		void world.load({ entities: [{ type: 'x', tracked: true }, { type: 'x', tracked: true }] });
 
 		await world.clear();
 

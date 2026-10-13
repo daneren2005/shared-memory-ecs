@@ -18,9 +18,10 @@ interface InitCompleteMessage {
 
 // Sent on every (re)load: carries the system's init data and runs updateFunction.init. `sharedMemory` lets a real
 // worker reconstruct handles over the world's component pools + eid counter (for off-thread allocation).
-interface LoadMessage<D = unknown> {
+interface LoadMessage<D = unknown> extends LoadDeltas {
 	type: 'load'
 	data?: D
+	gameTime: number
 	heap?: MemoryHeapMemory
 	sharedMemory?: WorldSharedMemory
 	// Factory templates by type, shipped only to systems registered with createsEntities, so the worker can merge a
@@ -28,6 +29,12 @@ interface LoadMessage<D = unknown> {
 	factoryConfigs?: { [type: string]: Record<string, unknown> }
 	factoryClasses?: WorkerEntityClassRegistry
 	addsComponents?: boolean
+}
+
+// Membership queued before load. Applied to the persistent lists on load; queryChanged never sees it.
+export interface LoadDeltas {
+	entities: QueryDelta
+	queries: { [key: string]: QueryDelta }
 }
 
 // A buffer the heap grew after load: forwarded so the worker's reconstructed heap keeps resolving new pointers.

@@ -275,7 +275,7 @@ export default abstract class EntityWorkerSystem<
 		return this.initPromise.promise;
 	}
 
-	// Sends the init data over and runs the update function's own init in the worker
+	// Sends the init data plus pending membership over, so the worker caches every loaded entity before reporting loaded
 	finishLoading(): Promise<void> {
 		let { promise, resolve } = Promise.withResolvers<void>();
 		// Assigned before posting: the main-thread fallback replies synchronously from inside postMessage.
@@ -284,9 +284,16 @@ export default abstract class EntityWorkerSystem<
 			resolve,
 		};
 
+		const queries: { [key: string]: QueryDelta<T> } = {};
+		Object.entries(this.options.queries ?? {}).forEach(([queryKey, query]) => {
+			queries[queryKey] = this.buildQueryDelta(queryKey, query);
+		});
 		const message: EntitySystemWorkerMessage<W, D> = {
 			type: 'load',
 			data: this.options.getInitData?.(),
+			gameTime: this.gameTime,
+			entities: this.buildQueryDelta(MAIN_QUERY_NAME, this.options),
+			queries,
 			// Only a real worker needs the buffers to rebuild a heap, plus the pools + eid counter to allocate off-thread.
 			heap: this.isWorkerThread ? this.world.heap.getSharedMemory() : undefined,
 			sharedMemory: this.isWorkerThread ? this.world.getSharedComponentMemory() : undefined,
@@ -616,9 +623,20 @@ export type EntityUpdateFunction<
 	preRun?: EntityUpdatePreRunFunction<C, T, W>
 	preBatch?: EntityUpdatePreRunFunction<C, T, W>
 	entityRemoved?: EntityRemovedFunction<C, W>
-	init?: EntityUpdateInitFunction<W, D>
+	init?: EntityUpdateInitFunction<W, D, C, T>
 };
-export type EntityUpdateInitFunction<W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld, D = unknown> = (data: D | undefined) => Partial<W> | void;
+// Runs after the load's membership is applied, so `entities`/`queries` already hold every loaded entity.
+export type EntityUpdateInitFunction<
+	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
+	D = unknown,
+	C extends ComponentMap = ComponentMap,
+	T extends EntityUpdateComponents<C> = EntityUpdateComponents<C>,
+> = (
+	world: EntityWorkerSystemInitWorld,
+	data: D | undefined,
+	entities: Array<UpdateEntityConfigObject<T>>,
+	queries: EntityQueryComponents<C>,
+) => Partial<W> | void;
 export type EntityUpdatePreRunFunction<C extends ComponentMap, T extends EntityUpdateComponents<C>, W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld> = (
 	world: W,
 	entities: Array<UpdateEntityConfigObject<T>>,
@@ -662,6 +680,9 @@ export interface WorkerAllocator {
 	allocateEid(): number
 	allocateComponentBlock(name: string, values: Array<number>): number
 }
+
+// No callbacks or elapsedTime: init only seeds worker-local state, outside any run.
+export type EntityWorkerSystemInitWorld = Pick<EntityWorkerSystemWorld, 'gameTime' | 'getString' | 'heap'>;
 
 export interface EntityWorkerSystemWorld {
 	gameTime: number

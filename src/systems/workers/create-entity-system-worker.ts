@@ -81,7 +81,11 @@ export default function createEntitySystemWorker<
 			factoryConfigs = message.factoryConfigs;
 			factoryClasses = message.factoryClasses;
 			addsComponents = !!message.addsComponents;
-			worldExtension = updateFunction.init?.(message.data) ?? undefined;
+			entities = applyQueryDelta(entities, message.entities as QueryDelta<T>);
+			Object.entries(message.queries).forEach(([queryKey, delta]) => {
+				queryEntities[queryKey] = applyQueryDelta(queryEntities[queryKey] ?? [], delta as QueryDelta<T>);
+			});
+			worldExtension = updateFunction.init?.({ gameTime: message.gameTime, getString, heap }, message.data, entities, queryEntities) ?? undefined;
 			postMessageTyped(scope, {
 				type: 'loaded',
 			});

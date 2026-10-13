@@ -501,7 +501,11 @@ itself. Both are optional properties on the `EntityUpdateFunction`.
 **`init`** runs on `system.finishLoading()` — once at startup (`world.init()` calls it), and again on each
 `world.load()` so a reused world re-seeds its workers. It receives whatever the system's `getInitData()` returned
 (structured-cloned across the boundary) and returns a `Partial<W>` that is merged onto `world` on every
-subsequent run. Use it for state that must be seeded from the main thread but then persist inside the worker
+subsequent run. The same `load` message also carries the system's current query membership, so the worker has
+every loaded entity cached before `finishLoading()` resolves. `init(world, data, entities, queries)` receives those
+populated lists plus a base `world` with `gameTime`, `getString` and `heap` (no `elapsedTime` or callbacks: init
+seeds worker state and must not modify entities); that initial membership never reaches `queryChanged`, so build any index over the loaded entities
+in `init`. Use it for state that must be seeded from the main thread but then persist inside the worker
 — a seeded RNG, a lookup table, a config object — without paying to re-send it each frame. Type the init
 data with the `D` type parameter (the fourth on `EntityUpdateFunction` / `EntityWorkerSystem`) so `getInitData`
 and the `init` hook agree on its shape; it defaults to `unknown` when a system has no init data:
@@ -519,7 +523,7 @@ const damageUpdate: EntityUpdateFunction<Components, { health: Int32Array }, Dam
 
 // Runs once in the worker; its return is merged onto `world` before every run. `data` is typed as
 // `DamageInitData | undefined` (undefined when the system supplies no getInitData).
-damageUpdate.init = (data) => ({ damage: data?.baseDamage ?? 1 });
+damageUpdate.init = (_world, data) => ({ damage: data?.baseDamage ?? 1 });
 
 class DamageSystem extends EntityWorkerSystem<Components, { health: Int32Array }, DamageWorld, DamageInitData> {
 	constructor(world: BaseWorld<Components>) {
@@ -554,11 +558,13 @@ damageUpdate.preRun = (world, entities, queries, callbacks) => {
 with that query's name and its `{ added, removed }` delta. Use it to keep a worker-local structure in sync with a
 set of entities that rarely changes - a navigation grid of static walls, a lookup of static targets - instead of
 rescanning the whole query every run. `added` can repeat an entity already in the query (its components changed
-and its blocks were re-sent), so treat it as an upsert. Keep that structure on the `init`-returned state so a
-reloaded world rebuilds it from scratch; the reload re-sends every member as added:
+and its blocks were re-sent), so treat it as an upsert. Seed that structure in `init` from the loaded `queries`,
+since entities present at load are never reported to `queryChanged`; a reload re-runs `init`, rebuilding it:
 
 ```ts
-wallUpdate.init = () => ({ walls: new Map<number, Rect>() });
+wallUpdate.init = (_world, _data, _entities, queries) => ({
+	walls: new Map((queries.walls ?? []).map(({ entityId, components }) => [entityId, rectOf(components.transform)])),
+});
 wallUpdate.queryChanged = (world, queryName, delta) => {
 	delta.removed.forEach(entityId => world.walls.delete(entityId));
 	delta.added.forEach(({ entityId, components }) => world.walls.set(entityId, rectOf(components.transform)));
@@ -609,7 +615,8 @@ import { createSystemWorker } from '@daneren2005/shared-memory-ecs/worker';
 createSystemWorker(self, spawnerUpdate, registry);
 ```
 
-The run function may carry the same `init` / `queryChanged` / `entityRemoved` hooks as an `updateFunction`. Everything else —
+The run function may carry the same `init` / `queryChanged` / `entityRemoved` hooks as an `updateFunction`; its
+`init(world, data, queries)` omits the entity list, since there is no main query. Everything else —
 callbacks, worker fallback, off-thread creation — behaves exactly as an `EntityWorkerSystem`.
 
 The worker helpers report unhandled promise rejections on the main thread with the system name,
@@ -907,7 +914,9 @@ from `entity-removed`, which fires for every removal, reloads included).
 
 A world is meant to be reused rather than rebuilt. `world.load(config)` swaps in a fresh scenario — it removes
 the old entities, clears every system, and loads the new batch (deferred frees from the old contents drain over
-the following updates, as above). `await world.clear()` instead tears the world all the way back down to an
+the following updates, as above). Loading itself is synchronous, but it returns a promise that resolves once every
+system's `finishLoading()` (e.g. a worker re-seeding its `init` data) completes — `await world.load(config)` before
+starting the game loop. `await world.clear()` instead tears the world all the way back down to an
 empty, reusable state: it waits for every system's in-flight worker run to finish so nothing is still reading
 the memory, frees the held blocks immediately, and resolves once the world is ready to load into again.
 

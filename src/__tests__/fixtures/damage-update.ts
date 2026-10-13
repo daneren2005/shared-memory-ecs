@@ -27,7 +27,7 @@ export const damageUpdate: EntityUpdateFunction<Components, Pick<ComponentArrays
 
 // Exercises the init hook: a getInitData `{ damage }` payload becomes persistent per-run world state. Returns
 // undefined when no payload, so systems without getInitData keep the default-1 behavior.
-damageUpdate.init = (data) => {
+damageUpdate.init = (_world, data) => {
 	const damage = data?.damage;
 	return damage === undefined ? undefined : { damage };
 };

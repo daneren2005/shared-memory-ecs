@@ -43,13 +43,20 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 		};
 	}
 
+	private getString = (pointer: number): string => this.world.constantStrings.getString(pointer) ?? '';
+
 	postMessage(message: EntitySystemWorkerMessage<W, D>): void {
 		if(message.type === 'init') {
 			this.onMessageTyped({
 				type: 'init-complete',
 			});
 		} else if(message.type === 'load') {
-			this.worldExtension = this.updateFunction.init?.(message.data) ?? undefined;
+			this.entities = applyQueryDelta(this.entities, message.entities as QueryDelta<T>);
+			Object.entries(message.queries).forEach(([queryKey, delta]) => {
+				this.queryEntities[queryKey] = applyQueryDelta(this.queryEntities[queryKey] ?? [], delta as QueryDelta<T>);
+			});
+			const world = { gameTime: message.gameTime, getString: this.getString, heap: this.world.heap };
+			this.worldExtension = this.updateFunction.init?.(world, message.data, this.entities, this.queryEntities) ?? undefined;
 			this.onMessageTyped({
 				type: 'loaded',
 			});
@@ -63,7 +70,7 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 			if(this.worldExtension) {
 				Object.assign(message.world, this.worldExtension);
 			}
-			message.world.getString = (pointer: number) => this.world.constantStrings.getString(pointer) ?? '';
+			message.world.getString = this.getString;
 			message.world.heap = this.world.heap;
 			message.world.allocate = this.allocator;
 			if(this.createsEntities) {

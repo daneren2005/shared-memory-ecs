@@ -4,7 +4,7 @@ import type { SystemConfig } from './system';
 import EntityWorkerSystem, {
 	type EntityWorkerSystemQuery, type EntityWorkerSystemWorld, type EntityUpdateComponents,
 } from './entity-worker-system';
-import { toEntityUpdateFunction, type WorkerSystemRunFunction } from './workers/create-system-worker';
+import { toEntityUpdateFunction, type WorkerSystemInitFunction, type WorkerSystemRunFunction } from './workers/create-system-worker';
 
 // An EntityWorkerSystem that runs its update function once per tick instead of once per entity. It accepts the same
 // named `queries` (so it can count/scan other entities), runs on its own worker, can create entities off-thread, and
@@ -48,4 +48,4 @@ export interface WorkerSystemConfig<
 	queries?: { [key: string]: EntityWorkerSystemQuery<C> }
 }
 
-export type { WorkerSystemRunFunction };
+export type { WorkerSystemInitFunction, WorkerSystemRunFunction };

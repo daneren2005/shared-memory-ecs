@@ -90,7 +90,7 @@ describe('entity-worker-system world reuse', () => {
 		// Model a run in flight: run() sets this when it posts to the worker and only the reply clears it.
 		Reflect.set(system, 'isRunning', true);
 
-		world.load({ entities: [{ maxHealth: 100 }] });
+		void world.load({ entities: [{ maxHealth: 100 }] });
 
 		expect(Reflect.get(system, 'isRunning')).toEqual(false);
 	});
@@ -127,7 +127,7 @@ describe('entity-worker-system world reuse', () => {
 		world.loadEntity({ maxHealth: 100 });
 		expect(system.isEntityInSystem(Array.from(world.entities.values())[0])).toEqual(true);
 
-		world.load({ entities: [] });
+		void world.load({ entities: [] });
 
 		expect(system.entities.size).toEqual(0);
 	});
@@ -138,7 +138,7 @@ describe('entity-worker-system world reuse', () => {
 		system.run(16);
 		expect(workerEntityCount(system)).toEqual(1);
 
-		world.load({ entities: [] });
+		void world.load({ entities: [] });
 
 		expect(workerEntityCount(system)).toEqual(0);
 	});
@@ -155,7 +155,7 @@ describe('entity-worker-system world reuse', () => {
 			reportedIds.push(...entityIds);
 		});
 
-		world.load({ entities: [{ maxHealth: 100 }] });
+		void world.load({ entities: [{ maxHealth: 100 }] });
 		deliverRunComplete(system, { generation: staleGeneration, systemEvents: { [DAMAGED_ENTITIES_EVENT]: [oldEntity.eid] } });
 
 		expect(reportedIds).not.toContain(oldEntity.eid);
@@ -168,7 +168,7 @@ describe('entity-worker-system world reuse', () => {
 			let oldEntity = world.loadEntity({ maxHealth: 100 });
 			let staleGeneration = generationOf(system);
 
-			world.load({ entities: [{ maxHealth: 100 }] });
+			void world.load({ entities: [{ maxHealth: 100 }] });
 			deliverRunComplete(system, {
 				generation: staleGeneration,
 				events: [{ entityId: oldEntity.eid, event: 'component-property-updated', args: ['health', 'health', 99] }],
@@ -185,7 +185,7 @@ describe('entity-worker-system world reuse', () => {
 		world.loadEntity({ maxHealth: 100 });
 		let staleGeneration = generationOf(system);
 
-		world.load({ entities: [{ maxHealth: 50 }] });
+		void world.load({ entities: [{ maxHealth: 50 }] });
 		expect(world.entities.size).toEqual(1);
 
 		deliverRunComplete(system, { generation: staleGeneration, created: [{ maxHealth: 10 }] });
@@ -199,7 +199,7 @@ describe('entity-worker-system world reuse', () => {
 		world.loadEntity({ maxHealth: 100 });
 		system.run(16);
 
-		world.load({ entities: [{ maxHealth: 100 }] });
+		void world.load({ entities: [{ maxHealth: 100 }] });
 		let entity = Array.from(world.entities.values())[0];
 
 		let events: Array<number> = [];

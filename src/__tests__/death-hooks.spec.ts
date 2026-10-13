@@ -98,10 +98,10 @@ describe('death hooks', () => {
 	it('does not fire died on world.load() teardown', () => {
 		const { registry, died } = makeRegistry();
 		const world = new BaseWorld(registry);
-		world.load({ entities: [{ type: 'x', x: 1, y: 2 }, { type: 'x', x: 3, y: 4 }] });
+		void world.load({ entities: [{ type: 'x', x: 1, y: 2 }, { type: 'x', x: 3, y: 4 }] });
 
 		// Reloading removes the old entities, but that is not a death.
-		world.load({ entities: [] });
+		void world.load({ entities: [] });
 		expect(died).not.toHaveBeenCalled();
 	});
 

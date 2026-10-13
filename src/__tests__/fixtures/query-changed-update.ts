@@ -4,16 +4,22 @@ import type { ComponentArrays, Components } from './components';
 export const QUERY_ADDED_EVENT = 'query-added';
 export const QUERY_REMOVED_EVENT = 'query-removed';
 export const TRACKED_EVENT = 'tracked';
+export const INITIAL_ENTITIES_EVENT = 'initial-entities';
 
 // Mirrors a worker-local structure kept in sync from query deltas: `tracked` lives in the init-returned extension.
 export interface QueryChangedWorld extends EntityWorkerSystemWorld {
 	tracked: Set<number>
+	initialEntities: Array<number>
 	failQueryChanged?: boolean
 }
 
 export const queryChangedUpdate: EntityUpdateFunction<Components, Pick<ComponentArrays, 'health'>, QueryChangedWorld> = () => {};
 
-queryChangedUpdate.init = () => ({ tracked: new Set<number>() });
+// Seeds from the loaded membership, which queryChanged never reports.
+queryChangedUpdate.init = (_world, _data, entities, queries) => ({
+	tracked: new Set((queries.moving ?? []).map(entity => entity.entityId)),
+	initialEntities: entities.map(entity => entity.entityId),
+});
 
 queryChangedUpdate.queryChanged = (world, queryName, delta, callbacks) => {
 	if(world.failQueryChanged) {
@@ -32,4 +38,5 @@ queryChangedUpdate.queryChanged = (world, queryName, delta, callbacks) => {
 // Reports the tracked set after queryChanged, proving the hook runs before preRun.
 queryChangedUpdate.preRun = (world, entities, queries, callbacks) => {
 	world.tracked.forEach(entityId => callbacks.emitSystemEvent(TRACKED_EVENT, entityId));
+	world.initialEntities.forEach(entityId => callbacks.emitSystemEvent(INITIAL_ENTITIES_EVENT, entityId));
 };

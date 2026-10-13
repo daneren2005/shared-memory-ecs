@@ -327,7 +327,7 @@ describe('conflict scheduler', () => {
 			if(destroy) {
 				world.destroy();
 			} else {
-				world.load({ entities: [] });
+				void world.load({ entities: [] });
 			}
 			await Promise.resolve();
 			expect(reader.deltas).toEqual([]);
@@ -438,7 +438,7 @@ describe('conflict scheduler', () => {
 			if(action === 'reset') {
 				world.scheduler.reset?.(world);
 			} else if(action === 'reload') {
-				world.load({ entities: [] });
+				void world.load({ entities: [] });
 			} else if(action === 'clear') {
 				await world.clear();
 			} else {
@@ -909,7 +909,7 @@ describe('conflict scheduler', () => {
 		world.update(30);
 		expect(removed.deltas).toEqual([]);
 		expect(added.deltas).toEqual([30]);
-		world.load({ entities: [] });
+		void world.load({ entities: [] });
 		first.busy = false;
 		world.update(40);
 		expect(first.deltas).toEqual([10, 20, 40]);

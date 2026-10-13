@@ -1,5 +1,6 @@
 import { EntitySystem, EntityWorkerSystem, WorkerSystem } from '../../index';
 import type { BaseEntity, EntityWorkerSystemQuery } from '../../index';
+import type EntitySystemWorkerMessage from '../workers/entity-system-worker-message';
 import { createTestWorld, type Components, type Config, type TestWorld } from '../../__tests__/fixtures/components';
 import { eidsOf, listOf } from '../../__tests__/fixtures/entity-collections';
 
@@ -32,7 +33,7 @@ describe('world.load bulk membership', () => {
 		const check = vi.spyOn(EntitySystem.prototype, 'checkAddEntity');
 		const system = world.addSystem(new HealthSystem(world));
 
-		world.load({ entities: ENTITIES });
+		void world.load({ entities: ENTITIES });
 
 		expect(check).not.toHaveBeenCalled();
 		// The static entity has health but is filtered out.
@@ -40,7 +41,7 @@ describe('world.load bulk membership', () => {
 		expect(system.updatedOnAdd).toEqual(eidsOf(system.entities));
 	});
 
-	it('fills an EntityWorkerSystem main query, sub-queries and pending delta', () => {
+	it('fills an EntityWorkerSystem main query, sub-queries and ships the delta with load', () => {
 		const check = vi.spyOn(EntityWorkerSystem.prototype, 'checkAddEntity');
 		const system = world.addSystem(new QuerySystem(world, {
 			required: ['health'],
@@ -49,22 +50,29 @@ describe('world.load bulk membership', () => {
 				fast: { required: ['movement'], filter: entity => (entity.components.movement?.speed ?? 0) > 1 },
 			},
 		}));
+		const post = vi.spyOn(system.worker, 'postMessage');
 
-		world.load({ entities: ENTITIES });
+		void world.load({ entities: ENTITIES });
 
 		expect(check).not.toHaveBeenCalled();
+		const load = post.mock.calls.map(([message]) => message as EntitySystemWorkerMessage).find(message => message.type === 'load');
+		if(load?.type !== 'load') {
+			throw new Error('load not posted');
+		}
 		const main = loadedEids(entity => !!entity.components.health && !entity.components.movement);
 		expect(eidsOf(system.entities)).toEqual(main);
-		expect(system.pendingAdded('___main')).toEqual(main);
+		expect(load.entities.added.map(entity => entity.entityId)).toEqual(main);
+		expect(system.pendingAdded('___main')).toEqual([]);
 		const fast = loadedEids(entity => (entity.components.movement?.speed ?? 0) > 1);
 		expect(system.queryEids('fast')).toEqual(fast);
-		expect(system.pendingAdded('fast')).toEqual(fast);
+		expect(load.queries.fast.added.map(entity => entity.entityId)).toEqual(fast);
+		expect(system.pendingAdded('fast')).toEqual([]);
 	});
 
 	it('includes components added in finishLoading', () => {
 		const system = world.addSystem(new QuerySystem(world, { required: ['neighbors'] }));
 
-		world.load({ entities: ENTITIES });
+		void world.load({ entities: ENTITIES });
 
 		expect(eidsOf(system.entities)).toEqual(loadedEids(entity => !!entity.components.neighbors));
 	});
@@ -72,7 +80,7 @@ describe('world.load bulk membership', () => {
 	it('leaves a WorkerSystem main query empty and fills its sub-queries', () => {
 		const system = world.addSystem(new RunOnceSystem(world));
 
-		world.load({ entities: ENTITIES });
+		void world.load({ entities: ENTITIES });
 
 		expect(system.entities.size).toEqual(0);
 		expect(system.queryEids('moving')).toEqual(loadedEids(entity => !!entity.components.movement));
@@ -81,7 +89,7 @@ describe('world.load bulk membership', () => {
 	it('still checks each entity on a system with its own membership rule', () => {
 		const system = world.addSystem(new EvenOnlySystem(world));
 
-		world.load({ entities: ENTITIES });
+		void world.load({ entities: ENTITIES });
 
 		expect(system.checked).toEqual(loadedEids(() => true));
 		expect(eidsOf(system.entities)).toEqual(loadedEids(entity => !!entity.components.health && entity.eid % 2 === 0));
@@ -100,7 +108,7 @@ describe('world.load bulk membership', () => {
 			}
 		});
 
-		world.load({ entities: ENTITIES });
+		void world.load({ entities: ENTITIES });
 
 		expect(added.sort((a, b) => a - b)).toEqual(loadedEids(() => true).sort((a, b) => a - b));
 		expect(eidsOf(system.entities)).toContain(spawned?.eid);
@@ -108,7 +116,7 @@ describe('world.load bulk membership', () => {
 
 	it('goes back to per-entity checks once loading finishes', () => {
 		const system = world.addSystem(new QuerySystem(world, { required: ['health'] }));
-		world.load({ entities: [{ maxHealth: 10 }] });
+		void world.load({ entities: [{ maxHealth: 10 }] });
 
 		const later = world.loadEntity({ maxHealth: 20 });
 		const other = world.loadEntity({ speed: 1 });

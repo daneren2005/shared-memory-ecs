@@ -11,7 +11,7 @@ export const incrementalUpdate: IncrementalUpdate = (world, eid, components, que
 	components.health[0] -= world.elapsedTime;
 	callbacks.emitEntityEvent(eid, 'visited', world.elapsedTime, world.gameTime, world.preparedAt, components.movement?.[0]);
 };
-incrementalUpdate.init = fail => ({ state: { fail: fail ?? false } });
+incrementalUpdate.init = (_world, fail) => ({ state: { fail: fail ?? false } });
 incrementalUpdate.preRun = (world, entities, _queries, callbacks) => {
 	if(world.state?.fail === true) {
 		world.state.fail = false;

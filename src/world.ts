@@ -164,8 +164,8 @@ export default class BaseWorld<
 	async init() {
 		await Promise.all(this.systems.map(system => system.init()).filter(promise => promise instanceof Promise));
 	}
-	private finishLoadingSystems() {
-		return Promise.all(this.systems.map(system => system.finishLoading()).filter(promise => promise instanceof Promise));
+	private async finishLoadingSystems(): Promise<void> {
+		await Promise.all(this.systems.map(system => system.finishLoading()).filter(promise => promise instanceof Promise));
 	}
 
 	addEntity(entity: E, created = true): E {
@@ -229,7 +229,7 @@ export default class BaseWorld<
 	}
 	// Replaces the world's contents. Entities load with created = false so no finishLoading runs mid-batch;
 	// finishLoading is called on each once the whole batch exists, so cross-entity dependencies can resolve.
-	load(config: WorldConfig<Cfg>) {
+	load(config: WorldConfig<Cfg>): Promise<void> {
 		// A pristine world (fresh or just cleared) has nothing to tear down, so skip the per-system clear.
 		if(!this.pristine || (this.scheduler.prepareEffects && this.systems.some(system => system.isCurrentlyRunning()))) {
 			// Iterate over a copy since removeEntity mutates `this.entities`.
@@ -273,7 +273,7 @@ export default class BaseWorld<
 		this.timeScale = config.timeScale ?? 1;
 
 		// EntityWorkerSystem re-sends its init data here.
-		void this.finishLoadingSystems();
+		return this.finishLoadingSystems();
 	}
 	async clear(): Promise<void> {
 		if(this.pristine && !this.scheduler.beforeClear) {

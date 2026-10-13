@@ -191,8 +191,11 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
   cannot enqueue the same pool indexes or `free` hooks again.
 - **System startup (two phases):** `system.init()` resolves once the worker is up — `EntityWorkerSystem` posts
   `init` in its constructor and the worker answers `init-complete`. `system.finishLoading()` then posts `load`
-  carrying `getInitData()`'s result; the worker runs `updateFunction.init` and answers `loaded`. `world.init()`
-  awaits both in order, and `world.load()` re-runs `finishLoading` so a reused world re-seeds its workers.
+  carrying `getInitData()`'s result plus the pending main/sub-query deltas (flushed from `queryDeltas`); the worker
+  applies them to its persistent lists, runs `updateFunction.init` and answers `loaded`, so every loaded entity is
+  cached before loading resolves. `queryChanged` never sees the load deltas. `world.init()`
+  awaits both in order, and `world.load()` re-runs `finishLoading` so a reused world re-seeds its workers;
+  `load()` stays synchronous but returns that `finishLoading` promise.
   Worker `error`/`messageerror` events log the system name and reject `init()` on startup failure, including
   failures received before `init()` is called. `createEntitySystemWorker` also listens for worker-global
   `unhandledrejection` events (when the scope supports `addEventListener`) and forwards a cloneable Error in
@@ -252,8 +255,10 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
   fallback. The descriptor returns the template-derived class key; `world.adoptEntity` asks the main-thread factory
   for that wrapper, validates its component indexes against the allowlist, and attaches without reallocation.
 - **Worker update-function hooks:** besides the per-entity body, an `updateFunction` may carry `init`,
-  `queryChanged`, `preRun`, and `entityRemoved`. `init(data)` runs on every `finishLoading` — `data` comes from the
-  system's `getInitData()` (typed via the `D` param) — and its returned `Partial<W>` is merged onto `world`
+  `queryChanged`, `preRun`, and `entityRemoved`. `init(world, data, entities, queries)` runs on every `finishLoading` after the load's
+  membership is applied — `world` is an `EntityWorkerSystemInitWorld` (`gameTime` shipped in the `load` message,
+  `getString`, `heap`; no callbacks), `data` comes from the system's `getInitData()` (typed via the `D` param), and the lists
+  hold every loaded entity (a `WorkerSystem` run function's `init(world, data, queries)` omits the empty entity list). Its returned `Partial<W>` is merged onto `world`
   every run, so worker-local state (seeded RNG, lookup tables) persists without re-sending. `queryChanged` runs
   before `preRun`, once per sub-query whose membership changed, with its `{ added, removed }` delta (`added` is an
   upsert); a failure is reported and the run continues. `preRun` runs

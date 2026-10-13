@@ -33,6 +33,7 @@ parentPort.on('message', message => {
 	}
 	if(message.type === 'load') {
 		control = message.data.control;
+		applyDelta(message.entities);
 		parentPort.postMessage({ type: 'loaded' });
 		return;
 	}

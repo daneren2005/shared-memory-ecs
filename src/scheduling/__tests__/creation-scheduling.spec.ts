@@ -568,7 +568,7 @@ describe('conflict scheduler entity creation', () => {
 		if(action === 'reset') {
 			world.scheduler.reset?.(world);
 		} else if(action === 'reload') {
-			world.load({ entities: [] });
+			void world.load({ entities: [] });
 		} else if(action === 'clear') {
 			await world.clear();
 		} else {
@@ -615,7 +615,7 @@ describe('conflict scheduler entity creation', () => {
 			await creator.system.finishLoading();
 			world.update(16);
 			await started(creator.control);
-			world.load({ entities: [] });
+			void world.load({ entities: [] });
 			release(creator.control);
 			await vi.waitFor(() => expect(world.registry.health.memoryComponent.length).toBe(0));
 			expect(world.entities.size).toBe(0);

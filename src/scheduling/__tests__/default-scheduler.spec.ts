@@ -223,9 +223,9 @@ describe('default scheduler', () => {
 		const system = world.addSystem(new RecordingSystem(world));
 		const destroy = vi.spyOn(system, 'destroy');
 		await world.clear();
-		world.load({ entities: [{ maxHealth: 10 }] });
+		void world.load({ entities: [{ maxHealth: 10 }] });
 		expect(scheduler.reset).not.toHaveBeenCalled();
-		world.load({ entities: [{ maxHealth: 20 }] });
+		void world.load({ entities: [{ maxHealth: 20 }] });
 		expect(scheduler.reset).toHaveBeenCalledExactlyOnceWith(world);
 		await world.clear();
 		expect(scheduler.reset).toHaveBeenCalledTimes(2);
@@ -313,7 +313,7 @@ describe('default scheduler', () => {
 			world.update(16);
 			await Atomics.waitAsync(control, 0, 0, 2000).value;
 			expect(Atomics.load(control, 0)).toBe(1);
-			world.load({ entities: [] });
+			void world.load({ entities: [] });
 			release(control);
 			// FIFO load acknowledgement arrives after the discarded run-complete reply.
 			await system.finishLoading();

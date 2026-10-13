@@ -4,7 +4,7 @@
 export { default as createEntitySystemWorker } from './systems/workers/create-entity-system-worker';
 export type { EntitySystemWorkerScope } from './systems/workers/create-entity-system-worker';
 export { default as createSystemWorker } from './systems/workers/create-system-worker';
-export type { WorkerSystemRunFunction } from './systems/workers/create-system-worker';
+export type { WorkerSystemRunFunction, WorkerSystemInitFunction } from './systems/workers/create-system-worker';
 export { default as createEntityWorker } from './actions/create-entity-worker';
 export { default as addComponentWorker } from './actions/add-component-worker';
 export { default as removeComponentWorker } from './actions/remove-component-worker';
@@ -25,6 +25,7 @@ export type {
 	EntityQueryComponents,
 	EntityUpdateFunction,
 	EntityUpdateInitFunction,
+	EntityWorkerSystemInitWorld,
 	EntityUpdatePreRunFunction,
 	EntityQueryChangedFunction,
 	QueryDelta,

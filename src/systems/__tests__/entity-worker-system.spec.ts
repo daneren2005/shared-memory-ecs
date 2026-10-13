@@ -11,7 +11,7 @@ import { queryTargetUpdate } from '../../__tests__/fixtures/query-target-update'
 import { typeReadUpdate, TYPE_READ_EVENT } from '../../__tests__/fixtures/type-read-update';
 import { errorUpdate, POISON_MAX_HEALTH, type ErrorWorld } from '../../__tests__/fixtures/error-update';
 import { componentChangeUpdate, type ComponentChangeWorld } from '../../__tests__/fixtures/component-change-update';
-import { queryChangedUpdate, QUERY_ADDED_EVENT, QUERY_REMOVED_EVENT, TRACKED_EVENT, type QueryChangedWorld } from '../../__tests__/fixtures/query-changed-update';
+import { queryChangedUpdate, INITIAL_ENTITIES_EVENT, QUERY_ADDED_EVENT, QUERY_REMOVED_EVENT, TRACKED_EVENT, type QueryChangedWorld } from '../../__tests__/fixtures/query-changed-update';
 import type { SystemError } from '../../index';
 
 // Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.
@@ -668,6 +668,23 @@ describe.each(MODES)('entity-worker-system (%s)', (mode) => {
 				await flush();
 				expect(added).toEqual([[entity.eid]]);
 				expect(removed).toEqual([[entity.eid]]);
+			});
+
+			it('hands membership shipped with load to init instead of queryChanged', async () => {
+				let entity = createEntity({ maxHealth: 100, speed: 100 });
+				createEntity({ maxHealth: 100 });
+				let system = useSystem(new QueryChangedSystem(world, mode));
+				await initSystem(system);
+				let added = record(system, `moving-${QUERY_ADDED_EVENT}`);
+				let tracked = record(system, TRACKED_EVENT);
+				let initial = record(system, INITIAL_ENTITIES_EVENT);
+
+				system.run(16);
+				await flush();
+
+				expect(added).toEqual([]);
+				expect(tracked).toEqual([[entity.eid]]);
+				expect(initial).toEqual([eidsOf(system.entities)]);
 			});
 
 			it('is not called for a run where nothing changed', async () => {

@@ -41,7 +41,7 @@ describe('world clear', () => {
 		let world = createTestWorld();
 		expect(world.pristine).toEqual(true);
 
-		world.load({ entities: [{ maxHealth: 20 }] });
+		void world.load({ entities: [{ maxHealth: 20 }] });
 		expect(world.pristine).toEqual(false);
 	});
 
@@ -95,11 +95,11 @@ describe('world clear', () => {
 		let clearSpy = vi.spyOn(system, 'clear');
 
 		// First load into a pristine world: nothing to tear down.
-		world.load({ entities: [{ maxHealth: 20 }] });
+		void world.load({ entities: [{ maxHealth: 20 }] });
 		expect(clearSpy).not.toHaveBeenCalled();
 
 		// Second load into a dirty world: every system is cleared.
-		world.load({ entities: [{ maxHealth: 10 }] });
+		void world.load({ entities: [{ maxHealth: 10 }] });
 		expect(clearSpy).toHaveBeenCalledTimes(1);
 
 		// clear() also tears the systems down, then leaves the world pristine.
@@ -109,7 +109,7 @@ describe('world clear', () => {
 
 		// Loading a just-cleared world skips teardown again.
 		clearSpy.mockClear();
-		world.load({ entities: [{ maxHealth: 5 }] });
+		void world.load({ entities: [{ maxHealth: 5 }] });
 		expect(clearSpy).not.toHaveBeenCalled();
 	});
 
@@ -119,7 +119,7 @@ describe('world clear', () => {
 
 		await world.clear();
 
-		world.load({ entities: [{ maxHealth: 40 }, { maxHealth: 50 }] });
+		void world.load({ entities: [{ maxHealth: 40 }, { maxHealth: 50 }] });
 		expect(world.entities.size).toEqual(2);
 		expect(healthLength(world)).toEqual(2);
 	});

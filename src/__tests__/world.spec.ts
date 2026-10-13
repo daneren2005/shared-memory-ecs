@@ -34,7 +34,7 @@ describe('world load', () => {
 		let world = createTestWorld(factory);
 
 		// No entities of either type are loaded, yet both types must still be resolvable in a worker.
-		world.load({ entities: [] });
+		void world.load({ entities: [] });
 
 		for(let type of ['Space Ship', 'Miner']) {
 			const usedBefore = world.heap.currentUsed;
@@ -47,7 +47,7 @@ describe('world load', () => {
 
 	it('loads every entity from the config', () => {
 		let world = createTestWorld();
-		world.load({
+		void world.load({
 			entities: [
 				{ maxHealth: 20, speed: 5 },
 				{ maxHealth: 10 },
@@ -65,7 +65,7 @@ describe('world load', () => {
 		let old = world.loadEntity({ maxHealth: 20 });
 		expect(world.registry.health.memoryComponent.length).toEqual(1);
 
-		world.load({ entities: [{ maxHealth: 10 }] });
+		void world.load({ entities: [{ maxHealth: 10 }] });
 
 		expect(world.entities.has(old.eid)).toEqual(false);
 		expect(world.getEntityByEid(old.eid)).toBeUndefined();
@@ -84,7 +84,7 @@ describe('world load', () => {
 		world.addSystem(new NoopSystem(world));
 		expect(world.systems.length).toEqual(1);
 
-		world.load({ entities: [] });
+		void world.load({ entities: [] });
 		expect(world.systems.length).toEqual(1);
 	});
 
@@ -93,7 +93,7 @@ describe('world load', () => {
 		world.loadEntity({ maxHealth: 20 });
 		world.addSystem(new NoopSystem(world));
 
-		world.load({ entities: [] });
+		void world.load({ entities: [] });
 
 		expect(world.entities.size).toEqual(0);
 		expect(world.systems.length).toEqual(1);
@@ -101,7 +101,7 @@ describe('world load', () => {
 
 	it('runs finishLoading only after every entity exists so deferred components see the whole world', () => {
 		let world = createTestWorld();
-		world.load({
+		void world.load({
 			entities: [
 				// Counter is first yet counts all three others; without deferral it would see zero.
 				{ countsNeighbors: true },
@@ -117,7 +117,7 @@ describe('world load', () => {
 
 	it('every deferred component counts the full batch regardless of its position', () => {
 		let world = createTestWorld();
-		world.load({
+		void world.load({
 			entities: [
 				{ countsNeighbors: true },
 				{ maxHealth: 20 },
@@ -132,7 +132,7 @@ describe('world load', () => {
 	it('restores the world clocks from the config', () => {
 		let world = createTestWorld();
 
-		world.load({
+		void world.load({
 			entities: [],
 			gameTime: 5000,
 			playerTime: 8000,
@@ -150,7 +150,7 @@ describe('world load', () => {
 		world.playerTime = 8000;
 		world.timeScale = 4;
 
-		world.load({ entities: [] });
+		void world.load({ entities: [] });
 
 		expect(world.gameTime).toEqual(0);
 		expect(world.playerTime).toEqual(0);
@@ -163,7 +163,7 @@ describe('world load', () => {
 		let added: Array<any> = [];
 		world.on('entity-added', entity => added.push(entity));
 
-		world.load({
+		void world.load({
 			entities: [
 				{ maxHealth: 20 },
 				{ maxHealth: 10 },
@@ -189,7 +189,7 @@ describe('world load', () => {
 
 	it('calls removeEntity once when an entity loaded through load dies', () => {
 		let world = createTestWorld();
-		world.load({ entities: [{ maxHealth: 20 }] });
+		void world.load({ entities: [{ maxHealth: 20 }] });
 		let entity = listOf(world.entities)[0];
 
 		// The death handler is registered once (by load, not the created = false addEntity), so one kill removes once.

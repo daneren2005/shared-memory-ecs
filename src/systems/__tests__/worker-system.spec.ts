@@ -2,7 +2,7 @@ import { WorkerSystem } from '../../index';
 import type { System, BaseEntity } from '../../index';
 import { createTestWorld, type Components, type TestWorld } from '../../__tests__/fixtures/components';
 import { listOf } from '../../__tests__/fixtures/entity-collections';
-import { workerSystemUpdate, TARGETS_SEEN_EVENT, RUN_TAG_EVENT, type WorkerSystemWorld } from '../../__tests__/fixtures/worker-system-update';
+import { workerSystemUpdate, INIT_WORLD_EVENT, INITIAL_TARGETS_EVENT, TARGETS_SEEN_EVENT, RUN_TAG_EVENT, type WorkerSystemWorld } from '../../__tests__/fixtures/worker-system-update';
 
 const WORKER_SYSTEM_WORKER_URL = new URL('../../__tests__/fixtures/worker-system.worker.ts', import.meta.url);
 
@@ -84,6 +84,33 @@ describe.each(MODES)('worker-system (%s)', (mode) => {
 		await flush();
 		// The removal is reflected on the very next run.
 		expect(batches[1]).toEqual([first.eid]);
+	});
+
+	it('passes loaded sub-query membership to init', async () => {
+		let first = createEntity({ maxHealth: 100 });
+		let second = createEntity({ maxHealth: 100 });
+		let system = useSystem(new TestWorkerSystem(world, mode));
+		await initSystem(system);
+
+		let initial: Array<Array<number>> = [];
+		system.on(INITIAL_TARGETS_EVENT, (ids: Array<number>) => initial.push(ids));
+		system.run(16);
+		await flush();
+
+		expect(initial).toEqual([[first.eid, second.eid]]);
+	});
+
+	it('passes a base world with gameTime and heap to init', async () => {
+		world.gameTime = 1234;
+		let system = useSystem(new TestWorkerSystem(world, mode));
+		await initSystem(system);
+
+		let initWorld: Array<Array<number>> = [];
+		system.on(INIT_WORLD_EVENT, (values: Array<number>) => initWorld.push(values));
+		system.run(16);
+		await flush();
+
+		expect(initWorld).toEqual([[1234, 1]]);
 	});
 
 	it('receives fresh per-run data via addDataToWorld', async () => {

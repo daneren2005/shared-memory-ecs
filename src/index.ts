@@ -60,7 +60,7 @@ export { default as EntitySystem } from './systems/entity-system';
 export type { EntitySystemConfig } from './systems/entity-system';
 export { default as EntityWorkerSystem } from './systems/entity-worker-system';
 export { default as WorkerSystem } from './systems/worker-system';
-export type { WorkerSystemConfig, WorkerSystemRunFunction } from './systems/worker-system';
+export type { WorkerSystemConfig, WorkerSystemRunFunction, WorkerSystemInitFunction } from './systems/worker-system';
 export type {
 	EntityWorkerSystemConfig,
 	EntityWorkerSystemQuery,
@@ -75,6 +75,7 @@ export type {
 	EntityQueryComponents,
 	EntityUpdateFunction,
 	EntityUpdateInitFunction,
+	EntityWorkerSystemInitWorld,
 	EntityUpdatePreRunFunction,
 	EntityQueryChangedFunction,
 	QueryDelta,
