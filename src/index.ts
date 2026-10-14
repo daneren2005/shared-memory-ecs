@@ -1,5 +1,13 @@
 export { default as BaseWorld } from './world';
-export type { WorldOptions, WorldConfig } from './world';
+export type { WorldOptions, WorldConfig, CompressedWorldConfig } from './world';
+export { EntityCompressor, compressEntities, decompressEntity, decompressEntities } from './entity-compression';
+export type {
+	CompressedEntities,
+	CompressedEntityDefinition,
+	CompressedEntityDefinitions,
+	CompressedEntityProperty,
+	CompressedPropertyType,
+} from './entity-compression';
 export { default as DefaultScheduler } from './scheduling/default-scheduler';
 export { default as ConflictScheduler } from './scheduling/conflict-scheduler';
 export type { ConflictSchedule } from './scheduling/conflict-scheduler';

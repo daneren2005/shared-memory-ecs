@@ -926,6 +926,52 @@ through `system.addEntities(batch)`. Entities with the same component keys are g
 test runs once per group instead of once per entity; system membership keeps load order. A system that overrides
 `checkAddEntity` (or an `EntityWorkerSystem` that overrides `matchesQuery`) still has it called for each entity.
 
+### Compressing saves
+
+Big maps are mostly entities whose save is a `type` plus a few integers. `compressEntities(entities, definitions)`
+packs each config that fits a definition into a short ASCII string and leaves every other config as an object:
+
+```ts
+import { compressEntities } from '@daneren2005/shared-memory-ecs';
+
+const save = compressEntities(entities, [
+	{ type: 'grass', properties: [
+		// Stored as (value - offset) / step; tile centres become small tile indices.
+		{ name: 'x', type: 'uint', step: 32, offset: 16 },
+		{ name: 'y', type: 'uint', step: 32, offset: 16 },
+		{ name: 'harvestAmount', type: 'uint' },
+		{ name: 'harvestProgress', type: 'uint' },
+	] },
+]);
+// { type: 'grass', x: 7920, y: 15440, harvestProgress: 633000 } becomes '#g(q-!ok{)'; a worker stays an object.
+// => { entityDefinitions: { 0: { type: 'grass', properties: [...] } }, entities: ['#g(q-!ok{)', { type: 'worker', ... }] }
+await world.load({ ...save, gameTime });
+```
+
+`world.load()` expands string entities with the bundled `entityDefinitions`, and `decompressEntities` /
+`decompressEntity` do the same for tools. Property types are `int` (signed), `uint`, `boolean`, `float32` and `string`. `int`
+and `uint` decode as `stored * step / 10 ** decimals + offset` (defaults 1, 0, 0), so `decimals: 2` keeps hundredths.
+`float32` takes any number a `Float32Array` holds exactly, such as positions and velocities read from shared memory. A config stays an
+object when it has a property its definition lacks, or a value that wouldn't decode back exactly. Only definitions some
+string uses are bundled, so defining rare types costs nothing until one appears.
+
+Types with the same properties can share one definition by listing `types` instead of `type`; the save then stores
+the property list once:
+
+```ts
+{ types: ['oak', 'pine', 'birch'], properties: [...] }
+``` Missing values decode as absent. The definitions travel inside the save, so a later build can append,
+reorder or drop properties without breaking older saves.
+
+The string format lets other tools read saves without this library. A string is the definition key, then one field
+per property in definition order. A shared definition saved at key `n` gives its `types` the keys `n`, `n + 1`, ... in
+order, so every type still has its own key and sharing adds nothing to the strings. A field is `!` for absent, or a varint: little-endian base-45 digits, where every
+digit except the last comes from `` PQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|} `` and the last from
+`#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNO` (digit = position in its alphabet). Fields after the last present
+value are left out. `int` values are zigzag encoded (`n >= 0 ? 2n : -2n - 1`), booleans are 0 or 1, and a `float32` is
+the varint of its 32 IEEE 754 bits. A `string` is a varint length in UTF-16 code units followed by the raw characters,
+which may be any character; length 0 means `null`, and empty strings stay objects.
+
 ## Measuring performance
 
 `PerformanceTiming` watches a world and reports what running it costs. Hand it the world and it hooks itself

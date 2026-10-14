@@ -19,6 +19,7 @@ import type {
 } from './component-definition';
 import { entityDefinition, type EntityComponent } from './entity-component';
 import EntityFactory from './entity-factory';
+import { decompressEntities, type CompressedEntities } from './entity-compression';
 import DefaultScheduler from './scheduling/default-scheduler';
 import type { Scheduler, SchedulerUpdateResult } from './scheduling/scheduler';
 
@@ -54,6 +55,9 @@ export interface WorldConfig<Cfg = any> {
 	playerTime?: number
 	timeScale?: number
 }
+
+// A save whose entities may be strings packed by compressEntities; load expands them with the bundled definitions.
+export type CompressedWorldConfig<Cfg = any> = Omit<WorldConfig<Cfg>, 'entities'> & CompressedEntities<Cfg>;
 
 // Shipped to a worker so it can reconstruct handles over this world's shared state (see getSharedComponentMemory).
 export interface WorldSharedMemory {
@@ -229,7 +233,7 @@ export default class BaseWorld<
 	}
 	// Replaces the world's contents. Entities load with created = false so no finishLoading runs mid-batch;
 	// finishLoading is called on each once the whole batch exists, so cross-entity dependencies can resolve.
-	load(config: WorldConfig<Cfg>): Promise<void> {
+	load(config: WorldConfig<Cfg> | CompressedWorldConfig<Cfg>): Promise<void> {
 		// A pristine world (fresh or just cleared) has nothing to tear down, so skip the per-system clear.
 		if(!this.pristine || (this.scheduler.prepareEffects && this.systems.some(system => system.isCurrentlyRunning()))) {
 			// Iterate over a copy since removeEntity mutates `this.entities`.
@@ -252,7 +256,8 @@ export default class BaseWorld<
 
 		this.isBulkLoading = true;
 		try {
-			const entities = config.entities.map(entityConfig => this.loadEntity(entityConfig, false));
+			const configs = 'entityDefinitions' in config ? decompressEntities(config.entities, config.entityDefinitions) : config.entities;
+			const entities = configs.map(entityConfig => this.loadEntity(entityConfig, false));
 			for(let entity of entities) {
 				entity.finishLoading();
 				this.emit('entity-added', entity);

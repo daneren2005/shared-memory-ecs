@@ -48,6 +48,8 @@
 	"scripts": {
 		"build": "vite build && tsc -p tsconfig.build.json --emitDeclarationOnly",
 		"build:game": "npm run build && node scripts/build-game.mjs",
+		"pack-save": "node scripts/pack-save.mjs",
+		"unpack-save": "node scripts/unpack-save.mjs",
 		"type-check": "tsc --noEmit",
 		"lint": "cross-env NODE_ENV=production oxlint .",
 		"lint:fix": "cross-env NODE_ENV=production oxlint --fix .",

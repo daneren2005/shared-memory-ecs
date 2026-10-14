@@ -20,6 +20,7 @@ from `src/worker.ts` (the `/worker` subpath).
 - `npm test` — vitest (`vitest run`); worker tests use `@vitest/web-worker`
 - `npm run bench` — reproducible Vitest benchmarks at 1k/10k/100k entities; set `ECS_BENCH_SIZES` to a comma-separated subset for a smoke run
 - `npm run build` — vite build + `.d.ts` emit
+- `npm run unpack-save -- <save.json> [--out <file>]` / `npm run pack-save -- ...` — expand a save's packed entity strings (keeping `entityDefinitions`) or re-pack them with its own definitions; overwrite in place by default
 Run type-check and lint after every edit (AGENTS.md).
 
 ## Code map (`src/`)
@@ -33,6 +34,7 @@ Run type-check and lint after every edit (AGENTS.md).
 | `entity-component.ts` | The always-present four-slot `entity` component (`dead`, `isStatic`, immutable `type`, immutable `class`), all worker-visible. Type and class are pointers to interned `ConstantString`s. Exports `DEAD_INDEX`, `STATIC_INDEX`, `TYPE_INDEX`, `CLASS_INDEX`, and `entityDefinition`. Save persists type; class is recovered from that type's template. |
 | `constant-string-cache.ts` | `ConstantStringCache`: interns immutable strings (from `@daneren2005/shared-memory-objects`'s `ConstantString`) in the heap and resolves a stored pointer back to its string. `getOrCreate(value)` dedupes so identical values share one allocation; `getString(pointer)` is a Map hit before rebuilding from memory. The main thread creates+interns (`world.constantStrings`); each worker reconstructs its own cache over the same buffers to resolve pointers. |
 | `entity-class.ts` | Entity-class constructor/definition types plus `defineEntityClasses`/`defineEntityConfigs` inference helpers. A class maps to one wrapper constructor and an allowed component-key tuple; scoped template config types derive from those definitions. Worker metadata contains component names only, never constructors. |
+| `entity-compression.ts` | Save compression: `EntityCompressor`/`compressEntities` pack flat configs that fit a definition (`int`/`uint` with optional step/decimals/offset, `boolean`, bit-exact `float32`, and length-prefixed `string`) into JSON-safe base-45 varint strings, and `decompressEntity`/`decompressEntities` expand them. Configs that don't fit stay objects. Each type gets the next key; a definition listing `types` shares one property list across consecutive keys, stored once under its first key. Only the used definitions are bundled in the save as `entityDefinitions`. Decoding resolves shared definitions to a per-key map, cached per definitions object. |
 | `entity-factory.ts` | `EntityFactory<C,Cfg,E>`: maps immutable type → template, merges instance data, resolves immutable class from the template, validates component triggers (against a per-class cached set of forbidden load properties; the registry scan only runs to build the error message), and constructs the registered wrapper with its allowlist. It also creates pre-minted shells for worker adoption and serializes class metadata for entity-creating workers. Classless factories retain the original path. |
 | `component-definition.ts` | All the component/registry types: `ComponentDefinition` — a component is built in two required halves, `toBlock(config, entity?)` (worker-safe config→block-values map) + `attach(entity, memory, index, config?)` (accessor over that block); loading is `attach(entity, memory, memory.create(toBlock(config)), config)`, and a worker calls only `toBlock`. `config` lets `attach` seed main-thread-only state kept off the block; adoption passes none. Plus the optional `free(component)` teardown hook, `save(component)`, and `died(component, entity, world)` (fires once on the main thread when the entity dies, before its blocks are freed — see Entity death). `BaseComponent`, `ComponentMap`, `ComponentRegistry`, `RegisteredComponentDefinition`, and the derivations `ComponentsOf` (from `attach`'s return, intersected with `BaseComponent`) / `EntityConfigOf` that infer `C`/`Cfg` from a registry. |
 | `component.ts` | `Component<T>` base class an `attach` returns (`new YourComponent(block, index)`): holds `block`/`index` fields, subclass adds prototype get/set over `this.block`. One shared hidden class per component type keeps reads monomorphic/inlinable and construction a single allocation (vs a closure per accessor). `attach` may still return a plain object; the entity layer fills in `block` either way. |
@@ -114,7 +116,10 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
   stays on the fast path.
 - **Save:** `entity.save()` merges each component's `save()` (Serialization slice only;
   Config comes back from the factory template) → flat `Cfg`. `world` config is
-  `{ entities: Cfg[], gameTime?, playerTime?, timeScale? }`.
+  `{ entities: Cfg[], gameTime?, playerTime?, timeScale? }`. `entity-compression.ts` (`compressEntities`,
+  `EntityCompressor`) can pack configs that fit a per-type definition into ASCII strings. That gives a
+  `CompressedWorldConfig` with `entityDefinitions`, and `world.load` expands its strings with
+  `decompressEntities` before loading.
 - **Update:** `world.update(dt)` → `update-started` → advance player clock → pause gate → scale delta and
   advance game clock → deferred-free promotion + spare-buffer preparation → `scheduler.update(world, dt)` →
   deferred-free timeout check → `update-finished`. The default scheduler dispatches each system's
