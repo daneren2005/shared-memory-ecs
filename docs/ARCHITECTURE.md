@@ -91,7 +91,7 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
 | `workers/create-system-worker.ts` | `createSystemWorker(self, runFn, registry?)` — worker entry helper for a `WorkerSystem`; wraps the single run function via `toEntityUpdateFunction` (run fn → `preRun`) and delegates to `createEntitySystemWorker`. Also the home of the `WorkerSystemRunFunction` type. Worker-safe (no main-thread system imports), so it stays in the `/worker` bundle. |
 | `workers/entity-system-web-worker.ts` | Main-thread side of the worker (message plumbing). |
 | `workers/entity-system-worker-message.ts` | Message + `EntityEvent`/`SystemEvents` types across the boundary. |
-| `workers/apply-query-delta.ts` | Applies query membership deltas. |
+| `workers/query-membership.ts` | `QueryMembership`: a worker-side query list kept from run deltas with a persistent eid index, so a delta costs only its own size. Removal swaps the last member into the gap, so member order is not kept across removals; `entries` is one array for its whole life. |
 | `workers/web-worker.ts` | `WebWorker` wrapper. |
 | `actions/kill-entity.ts` / `kill-entity-worker.ts` | Mark an entity dead (main / worker side). |
 | `actions/create-entity-worker.ts` | `createEntityWorker(world, config, callbacks)`: create an entity from a factory config off-thread (via `world.buildEntityDescriptor`), report the descriptor for the main thread to adopt. |

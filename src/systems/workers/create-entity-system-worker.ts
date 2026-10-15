@@ -7,11 +7,11 @@ import MemoryComponent from '../../memory-component';
 import type { ComponentDefinitionMap, ComponentMap } from '../../component-definition';
 import type {
 	EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityQueryComponents, EntityUpdateComponents,
-	EntityUpdateFunction, QueryDelta, UpdateEntityConfigObject, WorkerComponentChange, WorkerCreatedEntity,
+	EntityUpdateFunction, QueryDelta, WorkerComponentChange, WorkerCreatedEntity,
 } from '../entity-worker-system';
 import { buildWorkerComponent, buildWorkerEntity, type FactoryConfigs } from '../../actions/build-worker-entity';
 import type { WorkerEntityClassRegistry } from '../../entity-class';
-import { applyQueryDelta } from './apply-query-delta';
+import QueryMembership from './query-membership';
 import EntityWorkBatchState from './entity-work-batch';
 
 // The slice of the worker global scope createEntitySystemWorker touches. Passing `self` explicitly (rather than
@@ -39,10 +39,19 @@ export default function createEntitySystemWorker<
 		postMessageTyped(scope, { type: 'unhandled-rejection', error });
 	});
 
-	// Persistent lists, carried across runs and mutated by each run's delta (see applyQueryDelta).
-	let entities: Array<UpdateEntityConfigObject<T>> = [];
+	// Persistent lists, carried across runs and mutated by each run's delta.
+	const entities = new QueryMembership<T>();
 	const workState = new EntityWorkBatchState<T, W>();
-	const queryEntities: { [key: string]: Array<UpdateEntityConfigObject<T>> } = {};
+	const queryEntities: { [key: string]: QueryMembership<T> } = {};
+	const applyQueryDeltas = (deltas: { [key: string]: QueryDelta }): EntityQueryComponents<C> => {
+		const queries: EntityQueryComponents<C> = {};
+		for(const [queryKey, delta] of Object.entries(deltas)) {
+			const membership = queryEntities[queryKey] ??= new QueryMembership<T>();
+			membership.apply(delta as QueryDelta<T>);
+			queries[queryKey] = membership.entries;
+		}
+		return queries;
+	};
 	// What updateFunction.init returned: persistent state (e.g. a seeded RNG) merged onto `world` each run.
 	let worldExtension: Partial<W> | undefined;
 	let heap: MemoryHeap | undefined;
@@ -81,11 +90,9 @@ export default function createEntitySystemWorker<
 			factoryConfigs = message.factoryConfigs;
 			factoryClasses = message.factoryClasses;
 			addsComponents = !!message.addsComponents;
-			entities = applyQueryDelta(entities, message.entities as QueryDelta<T>);
-			Object.entries(message.queries).forEach(([queryKey, delta]) => {
-				queryEntities[queryKey] = applyQueryDelta(queryEntities[queryKey] ?? [], delta as QueryDelta<T>);
-			});
-			worldExtension = updateFunction.init?.({ gameTime: message.gameTime, getString, heap }, message.data, entities, queryEntities) ?? undefined;
+			entities.apply(message.entities as QueryDelta<T>);
+			const queries = applyQueryDeltas(message.queries);
+			worldExtension = updateFunction.init?.({ gameTime: message.gameTime, getString, heap }, message.data, entities.entries, queries) ?? undefined;
 			postMessageTyped(scope, {
 				type: 'loaded',
 			});
@@ -99,7 +106,7 @@ export default function createEntitySystemWorker<
 		} else if(message.type === 'reset') {
 			workState.clear();
 			// Drop the persistent lists so a reused world starts empty; worldExtension is refreshed by the next load.
-			entities = [];
+			entities.clear();
 			for(const key of Object.keys(queryEntities)) {
 				delete queryEntities[key];
 			}
@@ -131,15 +138,9 @@ export default function createEntitySystemWorker<
 			let componentChanges: Array<WorkerComponentChange> = [];
 			let errors: Array<WorkerRunError> = [];
 
-			entities = applyQueryDelta(entities, message.entities as QueryDelta<T>);
-			const runEntities = workState.getEntities(entities, message.entities as QueryDelta<T>, message.workBatch);
-
-			let queries: EntityQueryComponents<C> = {};
-			Object.entries(message.queries).forEach(([queryKey, delta]) => {
-				const list = applyQueryDelta(queryEntities[queryKey] ?? [], delta as QueryDelta<T>);
-				queryEntities[queryKey] = list;
-				queries[queryKey] = list;
-			});
+			entities.apply(message.entities as QueryDelta<T>);
+			const runEntities = workState.getEntities(entities.entries, message.entities as QueryDelta<T>, message.workBatch);
+			const queries = applyQueryDeltas(message.queries);
 
 			let callbacks: EntityWorkerSystemCallbacks<C> = {
 				entityComponentChanged<K extends keyof C, P extends keyof C[K]>(entityId: number, componentName: K, prop: P, value: C[K][P]) {
@@ -191,7 +192,7 @@ export default function createEntitySystemWorker<
 			let preRunFailed = false;
 			if(updateFunction.preRun && (!message.workBatch || message.workBatch.first)) {
 				try {
-					updateFunction.preRun(message.world, entities, queries, callbacks);
+					updateFunction.preRun(message.world, entities.entries, queries, callbacks);
 				} catch(err) {
 					preRunFailed = true;
 					errors.push({ error: err as Error, phase: 'preRun' });

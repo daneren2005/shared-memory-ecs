@@ -4,6 +4,7 @@ import { createTestWorld, type Components, type TestWorld } from '../../__tests_
 import NodeWorkerAdapter from '../../__tests__/fixtures/node-worker-adapter';
 import { damageUpdate, DAMAGED_ENTITIES_EVENT, type DamageWorld, type DamageInitData } from '../../__tests__/fixtures/damage-update';
 import { spawnUpdate } from '../../__tests__/fixtures/spawn-update';
+import type QueryMembership from '../workers/query-membership';
 
 const DAMAGE_WORKER_URL = new URL('../../__tests__/fixtures/damage.worker.ts', import.meta.url);
 const SPAWN_WORKER_URL = new URL('../../__tests__/fixtures/spawn.worker.ts', import.meta.url);
@@ -48,7 +49,7 @@ function generationOf(system: EntityWorkerSystem<Components, any, any, any>): nu
 	return Reflect.get(system, 'generation') as number;
 }
 function workerEntityCount(system: EntityWorkerSystem<Components, any, any, any>): number {
-	return (Reflect.get(system.worker, 'entities') as Array<unknown>).length;
+	return (Reflect.get(system.worker, 'entities') as QueryMembership<object>).entries.length;
 }
 
 async function waitForAtomicValue(control: Int32Array, index: number, expected: number): Promise<void> {

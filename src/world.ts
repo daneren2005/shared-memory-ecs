@@ -33,6 +33,15 @@ interface DeferredComponentFree {
 	free?: () => void
 }
 // A batch of component blocks queued to be freed, plus the systems that must each finish a run before it is safe to free them
+interface QueryKeys {
+	required: ReadonlyArray<PropertyKey>
+	optional?: ReadonlyArray<PropertyKey>
+	not?: ReadonlyArray<PropertyKey>
+}
+interface WorkerQueryKeys extends QueryKeys {
+	queries?: { [name: string]: QueryKeys }
+}
+
 interface ComponentFreeBuffer<C extends ComponentMap> {
 	frees: Array<DeferredComponentFree>
 	waitingSystems: Set<System<C>>
@@ -527,7 +536,7 @@ export default class BaseWorld<
 			if(system instanceof EntitySystem && system.options.components?.includes(component)) {
 				system.checkAddEntity(entity);
 			} else if(system instanceof EntityWorkerSystem) {
-				if(this.componentAffectsEntityWorkerSystem(system, component)) {
+				if(this.queriesReferenceComponent(system.options, component)) {
 					system.checkAddEntity(entity);
 				}
 			}
@@ -541,17 +550,18 @@ export default class BaseWorld<
 			if(system instanceof EntitySystem && system.options.components?.includes(component)) {
 				system.removeEntity(entity);
 			} else if(system instanceof EntityWorkerSystem) {
-				if(this.componentAffectsEntityWorkerSystem(system, component)) {
+				if(this.queriesReferenceComponent(system.options, component)) {
 					system.checkAddEntity(entity);
 				}
 			}
 		});
 	}
-	private componentAffectsEntityWorkerSystem(system: EntityWorkerSystem<C, any>, component: keyof C): boolean {
-		const affectsMainQuery = system.options.required.includes(component)
-			|| !!system.options.not?.includes(component)
-			|| !!system.options.optional?.includes(component);
-		const affectsSubQuery = Object.values(system.options.queries ?? {}).some(query => {
+	// Takes only query keys: an EntityWorkerSystem<C> parameter would make BaseWorld (and BaseEntity) invariant in C.
+	private queriesReferenceComponent(options: WorkerQueryKeys, component: keyof C): boolean {
+		const affectsMainQuery = options.required.includes(component)
+			|| !!options.not?.includes(component)
+			|| !!options.optional?.includes(component);
+		const affectsSubQuery = Object.values(options.queries ?? {}).some(query => {
 			return query.required.includes(component)
 				|| !!query.not?.includes(component)
 				|| !!query.optional?.includes(component);
