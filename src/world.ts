@@ -370,6 +370,16 @@ export default class BaseWorld<
 		}
 		this.scheduler.runCompleted?.(this, system);
 	}
+	// A waited-on system that went idle (e.g. its last entity was the one freed) would otherwise hold the buffer until
+	// the timeout. Not while mid-run: an in-flight worker or batched run still reports completion itself.
+	systemSkipped(system: System<C>) {
+		if(system.isCurrentlyRunning()) {
+			return;
+		}
+		if(this.activeFreeBuffer.waitingSystems.delete(system) && this.activeFreeBuffer.waitingSystems.size === 0) {
+			this.processFreeBuffers();
+		}
+	}
 	private processFreeBuffers() {
 		// Loop so a promoted buffer with no systems to wait for is freed the same tick rather than a frame later.
 		while(this.activeFreeBuffer.waitingSystems.size === 0) {
@@ -461,6 +471,9 @@ export default class BaseWorld<
 			const [system] = this.systems.splice(index, 1);
 			this.scheduler.systemRemoved?.(this, system);
 			this.emit('system-removed', system);
+			if(this.activeFreeBuffer.waitingSystems.delete(system) && this.activeFreeBuffer.waitingSystems.size === 0) {
+				this.processFreeBuffers();
+			}
 		}
 	}
 

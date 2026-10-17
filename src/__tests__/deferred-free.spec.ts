@@ -1,5 +1,5 @@
-import { System, EntityWorkerSystem } from '../index';
-import { createTestWorld, type Components, type TestWorld } from './fixtures/components';
+import { BaseWorld, ConflictScheduler, System, EntityWorkerSystem } from '../index';
+import { createTestWorld, registry, type Components, type TestWorld } from './fixtures/components';
 import { damageUpdate, type DamageWorld, type DamageInitData } from './fixtures/damage-update';
 
 // A minimal synchronous system whose run cadence and shouldRun the tests drive directly, so the world's deferred
@@ -17,6 +17,15 @@ class CountingSystem extends System<Components> {
 	}
 	shouldRun(): boolean {
 		return this.active;
+	}
+}
+
+// Stands in for a worker or batched run still in flight across updates.
+class InFlightSystem extends CountingSystem {
+	inFlight = false;
+
+	isCurrentlyRunning(): boolean {
+		return this.inFlight;
 	}
 }
 
@@ -166,6 +175,67 @@ describe('deferred component memory free', () => {
 		expect(healthLength(world)).toEqual(1);
 
 		system.destroy();
+	});
+
+	it.each([
+		['default', () => createTestWorld()],
+		['conflict', (): TestWorld => new BaseWorld(registry, { scheduler: new ConflictScheduler<Components>() })],
+	])('stops waiting on a system that goes idle before its next run (%s scheduler)', (_name, createWorld) => {
+		let warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			let world = createWorld();
+			let idle = new CountingSystem(world, 'IdleSystem', 1000);
+			world.addSystem(idle);
+
+			let entity = world.loadEntity({ maxHealth: 20 });
+			entity.removeComponent('health');
+
+			world.update(16);
+			expect(healthLength(world)).toEqual(1);
+
+			// e.g. its last entity died: it won't run again, so it can't touch the held block.
+			idle.active = false;
+			world.update(16);
+			expect(idle.runs).toEqual(0);
+			expect(healthLength(world)).toEqual(0);
+			expect(warn).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it('keeps waiting on a skipped system whose run is still in flight', () => {
+		let world = createTestWorld();
+		let system = new InFlightSystem(world, 'InFlight', 1000);
+		world.addSystem(system);
+
+		let entity = world.loadEntity({ maxHealth: 20 });
+		entity.removeComponent('health');
+
+		system.inFlight = true;
+		world.update(16);
+		system.active = false;
+		world.update(16);
+		expect(healthLength(world)).toEqual(1);
+
+		system.inFlight = false;
+		world.notifySystemRunCompleted(system);
+		expect(healthLength(world)).toEqual(0);
+	});
+
+	it('stops waiting on a system removed from the world', () => {
+		let world = createTestWorld();
+		let removed = new CountingSystem(world, 'Removed', 1000);
+		world.addSystem(removed);
+
+		let entity = world.loadEntity({ maxHealth: 20 });
+		entity.removeComponent('health');
+
+		world.update(16);
+		expect(healthLength(world)).toEqual(1);
+
+		world.removeSystem('Removed');
+		expect(healthLength(world)).toEqual(0);
 	});
 
 	it('does not free while paused', () => {

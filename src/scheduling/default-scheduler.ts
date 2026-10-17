@@ -13,6 +13,8 @@ export default class DefaultScheduler<C extends ComponentMap = ComponentMap> imp
 				shouldRun = system.shouldRun();
 				if(shouldRun) {
 					ran = system.update(elapsedTime);
+				} else {
+					context.systemSkipped?.(system);
 				}
 			} catch(e) {
 				const error = e as Error;

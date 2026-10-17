@@ -452,6 +452,7 @@ export default class ConflictScheduler<C extends ComponentMap = ComponentMap> im
 					}
 				} else {
 					this.complete(node);
+					context.systemSkipped?.(system);
 				}
 				return true;
 			});

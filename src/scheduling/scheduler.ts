@@ -10,6 +10,8 @@ export interface SchedulerContext<C extends ComponentMap = ComponentMap> extends
 	readonly dispatchAllowed?: boolean
 	// Prepare shared memory for deferred dispatch; false suspends dispatch during teardown.
 	prepareForSystemDispatch?(): boolean
+	// A system's shouldRun() was false, so it won't run this dispatch.
+	systemSkipped?(system: System<C>): void
 }
 
 export interface SchedulerUpdateResult {
