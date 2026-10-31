@@ -245,13 +245,15 @@ export default class BaseWorld<
 	load(config: WorldConfig<Cfg> | CompressedWorldConfig<Cfg>): Promise<void> {
 		// A pristine world (fresh or just cleared) has nothing to tear down, so skip the per-system clear.
 		if(!this.pristine || (this.scheduler.prepareEffects && this.systems.some(system => system.isCurrentlyRunning()))) {
+			// clear() drops a worker run's bookkeeping without waiting for it, so the old blocks must outlive that run.
+			const abandoned = this.systems.filter(system => system.isCurrentlyRunning());
 			// Iterate over a copy since removeEntity mutates `this.entities`.
 			for(let entity of Array.from(this.entities.values())) {
 				this.removeEntity(entity);
 			}
 			this.systems.forEach(system => system.clear());
 			this.scheduler.reset?.(this);
-			this.consolidateFreeBuffersForReload();
+			this.consolidateFreeBuffersForReload(abandoned);
 		}
 
 		// Intern a constant string for every type the factory knows, so a worker can resolve any type - even one no
@@ -370,9 +372,9 @@ export default class BaseWorld<
 		}
 		this.scheduler.runCompleted?.(this, system);
 	}
-	// A waited-on system that went idle (e.g. its last entity was the one freed) would otherwise hold the buffer until
-	// the timeout. Not while mid-run: an in-flight worker or batched run still reports completion itself.
-	systemSkipped(system: System<C>) {
+	// A worker run abandoned by clear() finally replied, so it's done with the old world's blocks. Not while a newer
+	// run is in flight: that one still reports completion itself.
+	notifyAbandonedRunFinished(system: System<C>) {
 		if(system.isCurrentlyRunning()) {
 			return;
 		}
@@ -402,22 +404,22 @@ export default class BaseWorld<
 		active.waitElapsed = 0;
 		active.waitingSystems.clear();
 		for(let system of this.systems) {
-			// Wait on a system if it will run (and so might pick up this block) or is already mid-run over memory we
-			// may free. A system that is neither can't touch these blocks, so there's nothing to wait for.
-			if(system.shouldRun() || system.isCurrentlyRunning()) {
+			// Only an in-flight run can be holding these blocks: a run that starts later only sees live entities, since
+			// workers apply the removed-delta before touching memory.
+			if(system.isCurrentlyRunning()) {
 				active.waitingSystems.add(system);
 			}
 		}
 	}
-	// On reload every system was just cleared (its completedRuns reset and worker told to drop its lists), so the
-	// old targets no longer apply. Collapse whatever was pending into `next` with a fresh (empty) active buffer
-	private consolidateFreeBuffersForReload() {
-		if(this.activeFreeBuffer.frees.length > 0) {
-			this.nextFreeBuffer.frees.push(...this.activeFreeBuffer.frees);
-			this.activeFreeBuffer.frees.length = 0;
-		}
-		this.activeFreeBuffer.waitingSystems.clear();
-		this.activeFreeBuffer.waitElapsed = 0;
+	// On reload every system was just cleared, so the old targets no longer apply. Collapse whatever was pending into
+	// `active`, waiting only on runs the clear abandoned mid-flight (each releases itself when its stale reply lands).
+	private consolidateFreeBuffersForReload(abandoned: ReadonlyArray<System<C>>) {
+		const active = this.activeFreeBuffer;
+		active.frees.push(...this.nextFreeBuffer.frees);
+		this.nextFreeBuffer.frees.length = 0;
+		active.waitingSystems.clear();
+		abandoned.forEach(system => active.waitingSystems.add(system));
+		active.waitElapsed = 0;
 	}
 	// Frees both buffers outright. Only safe once every system's in-flight run has finished (see clear()), since it
 	// skips the per-system wait the update loop normally enforces.

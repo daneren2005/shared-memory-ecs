@@ -168,15 +168,16 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
   (for anything the component owns beyond its block: a SharedList, child entities) — in the `next` of two rolling
   buffers. The `free` hook runs at the same deferred point as the block delete (in `performFrees`), not the instant
   the entity dies, so a system still mid-run can't observe the resource torn down early. Each update the
-  world promotes the pending buffer to `active`, snapshotting into a Set the systems that must each finish a run
-  first — those that `shouldRun()` (will run and might pick up the block) or are `isCurrentlyRunning()` (mid-run
-  over memory we may free). Each system needs just one completion: it drops out of the Set on its next
-  `notifySystemRunCompleted` (fired from `onRunFinished` / a worker's `run-complete`), because after that run it is
-  done with the block, and every later run applies the pending removed-delta before its update loop, so it can
-  never process the freed entity again. Once the Set empties the blocks are actually freed and the next buffer is
-  promoted. A buffer stuck longer than `FREE_BUFFER_STUCK_MS` (10s of unscaled time) warns which system it is
-  waiting on and frees anyway rather than leak. `world.load()` routes all pending frees through the same wait so
-  the reloaded world's systems each run once before the old blocks can be reused (see `consolidateFreeBuffersForReload`).
+  world promotes the pending buffer to `active`, snapshotting into a Set only the systems that are
+  `isCurrentlyRunning()` (mid-run over memory we may free). A run that hasn't started yet can't hold the block:
+  main-thread systems drop a removed entity immediately, and a worker applies the run's removed-delta (removals
+  before adds, so a reused block arrives as a fresh entry) before `queryChanged`/`preRun`/the update loop touch
+  memory. Each waited-on system drops out of the Set on its `notifySystemRunCompleted` (fired from `onRunFinished` /
+  a worker's `run-complete`). Once the Set empties the blocks are actually freed and the next buffer is promoted. A
+  buffer stuck longer than `FREE_BUFFER_STUCK_MS` (10s of unscaled time) warns which system it is waiting on and
+  frees anyway rather than leak. `world.load()` doesn't await in-flight worker runs and `clear()` resets their
+  `isRunning`, so it collapses all pending frees into `active` waiting on the systems that were mid-run; each is
+  released by `notifyAbandonedRunFinished` when its stale-generation reply lands (see `consolidateFreeBuffersForReload`).
 - **Clear / reuse:** `world.load()` removes every entity then calls `system.clear()` before loading the new
   batch. `EntityWorkerSystem.clear()` resets `isRunning`, empties its main-thread caches (`entities`,
   `queryEntities`, `queryDeltas`), posts `reset` to drop the worker's persistent lists, and bumps a `generation`

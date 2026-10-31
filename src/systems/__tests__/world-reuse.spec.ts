@@ -96,6 +96,21 @@ describe('entity-worker-system world reuse', () => {
 		expect(Reflect.get(system, 'isRunning')).toEqual(false);
 	});
 
+	it('holds the old world\'s blocks until a worker run abandoned by the reload reports back', () => {
+		let system = useSystem(new DamageSystem(world));
+		world.loadEntity({ maxHealth: 100 });
+		let staleGeneration = generationOf(system);
+		Reflect.set(system, 'isRunning', true);
+
+		// Nothing in the new world for the system to run over, so only the stale run can be holding the block.
+		void world.load({ entities: [] });
+		world.update(16);
+		expect(world.registry.health.memoryComponent.length).toEqual(1);
+
+		deliverRunComplete(system, { generation: staleGeneration });
+		expect(world.registry.health.memoryComponent.length).toEqual(0);
+	});
+
 	it('world.clear waits for a real in-flight worker before resolving', async () => {
 		const control = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
 		const system = useSystem(new ControlledSystem(world, control));

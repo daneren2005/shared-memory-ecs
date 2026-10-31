@@ -124,6 +124,7 @@ export default abstract class EntityWorkerSystem<
 					if(this.world.scheduler.prepareEffects) {
 						this.discardWorkerAllocations(message);
 					}
+					this.world.notifyAbandonedRunFinished(this);
 					return;
 				}
 				const timingBatch = this.timingBatch && { ...this.timingBatch, last: this.timingBatch.last || !!message.workFailed };

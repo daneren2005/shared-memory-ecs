@@ -50,7 +50,7 @@ function healthLength(world: TestWorld): number {
 }
 
 describe('deferred component memory free', () => {
-	it('holds a removed block until a waiting system finishes a run, then frees it', () => {
+	it('holds a removed block until the next update, then frees it', () => {
 		let world = createTestWorld();
 		let system = new CountingSystem(world);
 		world.addSystem(system);
@@ -80,28 +80,42 @@ describe('deferred component memory free', () => {
 		expect(healthLength(world)).toEqual(0);
 	});
 
-	it('waits for every system in the buffer, not just the first to finish', () => {
-		let world = createTestWorld();
-		let fast = new CountingSystem(world, 'Fast');
-		// Only runs once its accumulated delta crosses 100, so early updates leave it un-run.
-		let slow = new CountingSystem(world, 'Slow', 100);
-		world.addSystem(fast);
+	it.each([
+		['default', () => createTestWorld()],
+		['conflict', (): TestWorld => new BaseWorld(registry, { scheduler: new ConflictScheduler<Components>() })],
+	])('does not wait on a system whose next run has not started (%s scheduler)', (_name, createWorld) => {
+		let world = createWorld();
+		// Wants to run but is throttled: a run that hasn't started only sees live entities, so it can't hold the block.
+		let slow = new CountingSystem(world, 'Slow', 1000);
 		world.addSystem(slow);
 
 		let entity = world.loadEntity({ maxHealth: 20 });
 		entity.removeComponent('health');
 
 		world.update(16);
-		// Fast ran, Slow has not; the block must still be held because Slow could be using it.
-		expect(fast.runs).toEqual(1);
 		expect(slow.runs).toEqual(0);
+		expect(healthLength(world)).toEqual(0);
+	});
+
+	it('waits for every in-flight system, not just the first to finish', () => {
+		let world = createTestWorld();
+		let first = new InFlightSystem(world, 'First', 1000);
+		let second = new InFlightSystem(world, 'Second', 1000);
+		first.inFlight = true;
+		second.inFlight = true;
+		world.addSystem(first);
+		world.addSystem(second);
+
+		let entity = world.loadEntity({ maxHealth: 20 });
+		entity.removeComponent('health');
+		world.update(16);
+
+		first.inFlight = false;
+		world.notifySystemRunCompleted(first);
 		expect(healthLength(world)).toEqual(1);
 
-		// Advance until Slow's delta crosses 100 and it finally runs.
-		for(let i = 0; i < 6; i++) {
-			world.update(16);
-		}
-		expect(slow.runs).toBeGreaterThanOrEqual(1);
+		second.inFlight = false;
+		world.notifySystemRunCompleted(second);
 		expect(healthLength(world)).toEqual(0);
 	});
 
@@ -109,8 +123,9 @@ describe('deferred component memory free', () => {
 		let warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		try {
 			let world = createTestWorld();
-			// shouldRun stays true so it joins the wait list, but its huge delta means it never actually runs.
-			let stuck = new CountingSystem(world, 'StuckSystem', Number.MAX_SAFE_INTEGER);
+			// Mid-run and never reports completion.
+			let stuck = new InFlightSystem(world, 'StuckSystem', Number.MAX_SAFE_INTEGER);
+			stuck.inFlight = true;
 			world.addSystem(stuck);
 
 			let entity = world.loadEntity({ maxHealth: 20 });
@@ -136,7 +151,8 @@ describe('deferred component memory free', () => {
 		let warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		try {
 			let world = createTestWorld();
-			let stuck = new CountingSystem(world, 'StuckSystem', Number.MAX_SAFE_INTEGER);
+			let stuck = new InFlightSystem(world, 'StuckSystem', Number.MAX_SAFE_INTEGER);
+			stuck.inFlight = true;
 			world.addSystem(stuck);
 			world.timeScale = 1000;
 
@@ -165,43 +181,20 @@ describe('deferred component memory free', () => {
 		let survivor = world.loadEntity({ maxHealth: 30 });
 		expect(healthLength(world)).toEqual(2);
 
-		// Drop one entity's block; the survivor keeps the system non-empty so it still runs (and is thus waited on).
+		// The survivor's run is in flight when the block is orphaned, so the block waits for it.
+		world.update(16);
 		removed.removeComponent('health');
+		Reflect.set(system, 'isRunning', true);
+		world.update(16);
 		expect(healthLength(world)).toEqual(2);
 
-		world.update(16);
-		// The system ran over the survivor, so its worker reported back and the held block is now freed.
+		// Its worker reports back, so the held block is now freed.
+		Reflect.set(system, 'isRunning', false);
+		world.notifySystemRunCompleted(system);
 		expect(survivor.components.health?.health).toEqual(29);
 		expect(healthLength(world)).toEqual(1);
 
 		system.destroy();
-	});
-
-	it.each([
-		['default', () => createTestWorld()],
-		['conflict', (): TestWorld => new BaseWorld(registry, { scheduler: new ConflictScheduler<Components>() })],
-	])('stops waiting on a system that goes idle before its next run (%s scheduler)', (_name, createWorld) => {
-		let warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		try {
-			let world = createWorld();
-			let idle = new CountingSystem(world, 'IdleSystem', 1000);
-			world.addSystem(idle);
-
-			let entity = world.loadEntity({ maxHealth: 20 });
-			entity.removeComponent('health');
-
-			world.update(16);
-			expect(healthLength(world)).toEqual(1);
-
-			// e.g. its last entity died: it won't run again, so it can't touch the held block.
-			idle.active = false;
-			world.update(16);
-			expect(idle.runs).toEqual(0);
-			expect(healthLength(world)).toEqual(0);
-			expect(warn).not.toHaveBeenCalled();
-		} finally {
-			warn.mockRestore();
-		}
 	});
 
 	it('keeps waiting on a skipped system whose run is still in flight', () => {
@@ -225,7 +218,8 @@ describe('deferred component memory free', () => {
 
 	it('stops waiting on a system removed from the world', () => {
 		let world = createTestWorld();
-		let removed = new CountingSystem(world, 'Removed', 1000);
+		let removed = new InFlightSystem(world, 'Removed', 1000);
+		removed.inFlight = true;
 		world.addSystem(removed);
 
 		let entity = world.loadEntity({ maxHealth: 20 });
