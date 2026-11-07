@@ -1,5 +1,5 @@
 export { default as BaseWorld } from './world';
-export type { WorldOptions, WorldConfig, CompressedWorldConfig } from './world';
+export type { WorldOptions, WorldConfig, CompressedWorldConfig, WorldLoadOptions, WorldLoadPhase, WorldLoadProgress } from './world';
 export { EntityCompressor, compressEntities, decompressEntity, decompressEntities } from './entity-compression';
 export type {
 	CompressedEntities,

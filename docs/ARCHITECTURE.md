@@ -202,6 +202,11 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
   cached before loading resolves. `queryChanged` never sees the load deltas. `world.init()`
   awaits both in order, and `world.load()` re-runs `finishLoading` so a reused world re-seeds its workers;
   `load()` stays synchronous but returns that `finishLoading` promise.
+- **Sliced load:** `load()` runs a `loadSteps` generator (entities → linking → systems) that yields progress every
+  256 entities and after each system. With no `sliceMs` it is drained synchronously; with one, `loadSliced` awaits
+  `yieldTo` whenever a slice runs over. `isLoading` makes `update()` a no-op until systems are joined. A later
+  `load()`/`clear()`/`destroy()` aborts the active sliced load (`activeLoad`) and resets the loading flags; the aborted
+  generator is dropped, never resumed, so its `finally` can't touch the newer load's flags.
   Worker `error`/`messageerror` events log the system name and reject `init()` on startup failure, including
   failures received before `init()` is called. `createEntitySystemWorker` also listens for worker-global
   `unhandledrejection` events (when the scope supports `addEventListener`) and forwards a cloneable Error in

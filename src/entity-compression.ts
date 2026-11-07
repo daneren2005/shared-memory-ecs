@@ -285,13 +285,14 @@ export function decompressEntity(encoded: string, definitions: CompressedEntityD
 
 // Configs are flat records of the same shape a compressed string expands to, so the caller's Cfg is trusted here.
 export function decompressEntities<Cfg>(entities: ReadonlyArray<Cfg | string>, definitions: CompressedEntityDefinitions | undefined): Array<Cfg> {
-	return entities.map(entity => {
-		if(typeof entity !== 'string') {
-			return entity;
-		}
-		if(!definitions) {
-			throw new Error('Compressed entities need entityDefinitions to load');
-		}
-		return decompressEntity(entity, definitions) as Cfg;
-	});
+	return entities.map(entity => decompressEntityConfig(entity, definitions));
+}
+export function decompressEntityConfig<Cfg>(entity: Cfg | string, definitions: CompressedEntityDefinitions | undefined): Cfg {
+	if(typeof entity !== 'string') {
+		return entity;
+	}
+	if(!definitions) {
+		throw new Error('Compressed entities need entityDefinitions to load');
+	}
+	return decompressEntity(entity, definitions) as Cfg;
 }

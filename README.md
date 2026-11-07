@@ -926,6 +926,27 @@ through `system.addEntities(batch)`. Entities with the same component keys are g
 test runs once per group instead of once per entity; system membership keeps load order. A system that overrides
 `checkAddEntity` (or an `EntityWorkerSystem` that overrides `matchesQuery`) still has it called for each entity.
 
+#### Loading in slices with progress
+
+A big save can block the main thread for seconds. Pass `sliceMs` and `load()` yields to the event loop whenever a
+slice runs over, reporting progress as it goes:
+
+```ts
+await world.load(save, {
+	sliceMs: 25,
+	onProgress: ({ phase, done, total, fraction }) => setBar(fraction),
+	// Systems hold every entity and their load messages are posted; only worker replies are left.
+	onEntitiesReady: () => buildIndexes(world),
+});
+```
+
+Phases run `entities` → `linking` (`finishLoading`, `entity-added`) → `systems` (`addEntities`, then
+`finishLoading`) → `workers` (replies). `fraction` weights them 0.6 / 0.1 / 0.1 / 0.2. `yieldTo` overrides the yield
+(default `scheduler.yield()`, else `setTimeout(0)`). While `world.isLoading` is set, `update()` does nothing; don't touch
+the world until `load()` resolves. A `load()`, `clear()` or `destroy()` during a sliced load, or aborting its `signal`, rejects it
+with an `AbortError`, and the next load or clear tears down the partly loaded world. Without `sliceMs`, `load()` runs
+synchronously up to awaiting the workers, and `onProgress`/`onEntitiesReady` still fire.
+
 ### Compressing saves
 
 Big maps are mostly entities whose save is a `type` plus a few integers. `compressEntities(entities, definitions)`

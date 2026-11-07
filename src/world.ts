@@ -19,7 +19,7 @@ import type {
 } from './component-definition';
 import { entityDefinition, type EntityComponent } from './entity-component';
 import EntityFactory from './entity-factory';
-import { decompressEntities, type CompressedEntities } from './entity-compression';
+import { decompressEntityConfig, type CompressedEntities } from './entity-compression';
 import DefaultScheduler from './scheduling/default-scheduler';
 import type { Scheduler, SchedulerUpdateResult } from './scheduling/scheduler';
 
@@ -68,6 +68,33 @@ export interface WorldConfig<Cfg = any> {
 // A save whose entities may be strings packed by compressEntities; load expands them with the bundled definitions.
 export type CompressedWorldConfig<Cfg = any> = Omit<WorldConfig<Cfg>, 'entities'> & CompressedEntities<Cfg>;
 
+export type WorldLoadPhase = 'entities' | 'linking' | 'systems' | 'workers';
+export interface WorldLoadProgress {
+	phase: WorldLoadPhase
+	done: number
+	total: number
+	// Across the whole load, weighted by each phase's typical share of load time.
+	fraction: number
+}
+export interface WorldLoadOptions {
+	// Yield after this many ms of work. Omit to load synchronously up to awaiting the workers.
+	sliceMs?: number
+	// Defaults to scheduler.yield() where it exists, else setTimeout(0).
+	yieldTo?: () => Promise<void>
+	onProgress?: (progress: WorldLoadProgress) => void
+	// Runs once systems hold every entity and their load messages are posted, before worker replies are awaited.
+	onEntitiesReady?: () => void
+	signal?: AbortSignal
+}
+
+const LOAD_PHASES: Record<WorldLoadPhase, { start: number, weight: number }> = {
+	entities: { start: 0, weight: 0.6 },
+	linking: { start: 0.6, weight: 0.1 },
+	systems: { start: 0.7, weight: 0.1 },
+	workers: { start: 0.8, weight: 0.2 },
+};
+const LOAD_CHECK_INTERVAL = 256;
+
 // Shipped to a worker so it can reconstruct handles over this world's shared state (see getSharedComponentMemory).
 export interface WorldSharedMemory {
 	components: { [name: string]: SharedPoolMemory }
@@ -105,6 +132,10 @@ export default class BaseWorld<
 	pristine = true;
 	// True while load() adds its batch: systems ignore per-entity events and are handed every entity at the end.
 	isBulkLoading = false;
+	// True until load() has handed every entity to its systems; update() does nothing meanwhile.
+	isLoading = false;
+	// Only a sliced load outlives the call that started it, so only it can be aborted by a later load() or clear().
+	private activeLoad: AbortController | undefined;
 
 	// Two rolling buffers of component blocks awaiting a safe free. New deferrals land in `next`; `active` is the
 	// one currently waiting for its systems to each finish a run before its blocks can be reused
@@ -177,9 +208,6 @@ export default class BaseWorld<
 	async init() {
 		await Promise.all(this.systems.map(system => system.init()).filter(promise => promise instanceof Promise));
 	}
-	private async finishLoadingSystems(): Promise<void> {
-		await Promise.all(this.systems.map(system => system.finishLoading()).filter(promise => promise instanceof Promise));
-	}
 
 	addEntity(entity: E, created = true): E {
 		this.entities.set(entity.eid, entity);
@@ -242,7 +270,9 @@ export default class BaseWorld<
 	}
 	// Replaces the world's contents. Entities load with created = false so no finishLoading runs mid-batch;
 	// finishLoading is called on each once the whole batch exists, so cross-entity dependencies can resolve.
-	load(config: WorldConfig<Cfg> | CompressedWorldConfig<Cfg>): Promise<void> {
+	// Without sliceMs everything up to awaiting the workers runs before this returns.
+	load(config: WorldConfig<Cfg> | CompressedWorldConfig<Cfg>, options: WorldLoadOptions = {}): Promise<void> {
+		this.abortActiveLoad();
 		// A pristine world (fresh or just cleared) has nothing to tear down, so skip the per-system clear.
 		if(!this.pristine || (this.scheduler.prepareEffects && this.systems.some(system => system.isCurrentlyRunning()))) {
 			// clear() drops a worker run's bookkeeping without waiting for it, so the old blocks must outlive that run.
@@ -265,33 +295,143 @@ export default class BaseWorld<
 			this.constantStrings.getOrCreate(entityClass);
 		}
 
+		this.isLoading = true;
+		const steps = this.loadSteps(config);
+		if(options.sliceMs === undefined) {
+			let step: IteratorResult<WorldLoadProgress, Array<Promise<void>>>;
+			try {
+				while(!(step = steps.next()).done) {
+					options.onProgress?.(step.value);
+				}
+			} finally {
+				this.isLoading = false;
+			}
+			options.onEntitiesReady?.();
+			return this.awaitWorkers(step.value, options.onProgress, options.signal);
+		}
+
+		const controller = new AbortController();
+		this.activeLoad = controller;
+		const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+		return this.loadSliced(steps, options.sliceMs, controller, signal, options);
+	}
+	private async loadSliced(
+		steps: Generator<WorldLoadProgress, Array<Promise<void>>>,
+		sliceMs: number,
+		controller: AbortController,
+		signal: AbortSignal,
+		options: WorldLoadOptions,
+	): Promise<void> {
+		const yieldTo = options.yieldTo ?? defaultLoadYield;
+		try {
+			signal.throwIfAborted();
+			let sliceStart = performance.now();
+			let step = steps.next();
+			while(!step.done) {
+				options.onProgress?.(step.value);
+				if(performance.now() - sliceStart >= sliceMs) {
+					await yieldTo();
+					// An aborted generator is dropped rather than resumed or returned, so its finally can't clobber a newer load.
+					signal.throwIfAborted();
+					sliceStart = performance.now();
+				}
+				step = steps.next();
+			}
+			this.isLoading = false;
+			options.onEntitiesReady?.();
+			await this.awaitWorkers(step.value, options.onProgress, signal);
+		} catch(error) {
+			if(this.activeLoad === controller) {
+				this.activeLoad = undefined;
+				this.isBulkLoading = false;
+				this.isLoading = false;
+			}
+			throw error;
+		}
+		if(this.activeLoad === controller) {
+			this.activeLoad = undefined;
+		}
+	}
+	// Yields progress at each point a sliced load may pause; returns the systems' pending worker replies.
+	private *loadSteps(config: WorldConfig<Cfg> | CompressedWorldConfig<Cfg>): Generator<WorldLoadProgress, Array<Promise<void>>> {
+		const definitions = 'entityDefinitions' in config ? config.entityDefinitions : undefined;
+		const configs: ReadonlyArray<Cfg | string> = config.entities;
+		const entities: Array<E> = [];
 		this.isBulkLoading = true;
 		try {
-			const configs = 'entityDefinitions' in config ? decompressEntities(config.entities, config.entityDefinitions) : config.entities;
-			const entities = configs.map(entityConfig => this.loadEntity(entityConfig, false));
-			for(let entity of entities) {
+			for(let i = 0; i < configs.length; i++) {
+				entities.push(this.loadEntity(decompressEntityConfig(configs[i], definitions), false));
+				if((i + 1) % LOAD_CHECK_INTERVAL === 0) {
+					yield loadProgress('entities', i + 1, configs.length);
+				}
+			}
+			yield loadProgress('entities', configs.length, configs.length);
+
+			for(let i = 0; i < entities.length; i++) {
+				const entity = entities[i];
 				entity.finishLoading();
 				this.emit('entity-added', entity);
 				entity.on('death', () => {
 					this.onEntityDied(entity);
 				});
+				if((i + 1) % LOAD_CHECK_INTERVAL === 0) {
+					yield loadProgress('linking', i + 1, entities.length);
+				}
 			}
+			yield loadProgress('linking', entities.length, entities.length);
 		} finally {
 			this.isBulkLoading = false;
 		}
+
 		// Read back from the world rather than the batch, so entities created or removed by listeners mid-load are
 		// reflected. The world was empty beforehand, so no system holds any of these yet.
 		const batch = batchByComponents(this.entities.values());
-		this.systems.forEach(system => system.addEntities(batch));
+		const systems = this.systems.slice();
+		const total = systems.length * 2;
+		for(let i = 0; i < systems.length; i++) {
+			systems[i].addEntities(batch);
+			yield loadProgress('systems', i + 1, total);
+		}
 
 		this.gameTime = config.gameTime ?? 0;
 		this.playerTime = config.playerTime ?? 0;
 		this.timeScale = config.timeScale ?? 1;
 
 		// EntityWorkerSystem re-sends its init data here.
-		return this.finishLoadingSystems();
+		const workers: Array<Promise<void>> = [];
+		for(let i = 0; i < systems.length; i++) {
+			const loading = systems[i].finishLoading();
+			if(loading instanceof Promise) {
+				workers.push(loading);
+			}
+			yield loadProgress('systems', systems.length + i + 1, total);
+		}
+		return workers;
+	}
+	private async awaitWorkers(workers: Array<Promise<void>>, onProgress: WorldLoadOptions['onProgress'], signal: AbortSignal | undefined): Promise<void> {
+		let done = 0;
+		onProgress?.(loadProgress('workers', 0, workers.length));
+		const replies = Promise.all(workers.map(async loading => {
+			await loading;
+			onProgress?.(loadProgress('workers', ++done, workers.length));
+		}));
+		if(signal) {
+			await Promise.race([replies, rejectOnAbort(signal)]);
+		} else {
+			await replies;
+		}
+	}
+	private abortActiveLoad() {
+		if(!this.activeLoad) {
+			return;
+		}
+		this.activeLoad.abort();
+		this.activeLoad = undefined;
+		this.isBulkLoading = false;
+		this.isLoading = false;
 	}
 	async clear(): Promise<void> {
+		this.abortActiveLoad();
 		if(this.pristine && !this.scheduler.beforeClear) {
 			return;
 		}
@@ -480,6 +620,9 @@ export default class BaseWorld<
 	}
 
 	update(elapsedTime: number): SchedulerUpdateResult {
+		if(this.isLoading) {
+			return {};
+		}
 		this.emit('update-started', elapsedTime);
 		const result = this.runUpdate(elapsedTime);
 		this.emit('update-finished', elapsedTime);
@@ -589,6 +732,7 @@ export default class BaseWorld<
 		if(this.destroyed) {
 			return;
 		}
+		this.abortActiveLoad();
 
 		this.systems.forEach(system => {
 			system.destroy();
@@ -596,6 +740,24 @@ export default class BaseWorld<
 		this.scheduler.destroy?.(this);
 		this.destroyed = true;
 	}
+}
+
+function loadProgress(phase: WorldLoadPhase, done: number, total: number): WorldLoadProgress {
+	const { start, weight } = LOAD_PHASES[phase];
+	return { phase, done, total, fraction: start + weight * (total === 0 ? 1 : done / total) };
+}
+function defaultLoadYield(): Promise<void> {
+	const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+	return scheduler?.yield ? scheduler.yield() : new Promise(resolve => setTimeout(resolve, 0));
+}
+function rejectOnAbort(signal: AbortSignal): Promise<never> {
+	return new Promise((_, reject) => {
+		if(signal.aborted) {
+			reject(signal.reason);
+		} else {
+			signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+		}
+	});
 }
 
 // Removed components are deleted from the bag, so the key list alone identifies the component set.
