@@ -1019,3 +1019,5 @@ npm install
 npm run build      # emits dist/ (js + d.ts)
 npm run type-check
 ```
+
+Workers invoked directly outside scheduler dispatch publish their effects immediately. Replies from before a scheduler reset are discarded.

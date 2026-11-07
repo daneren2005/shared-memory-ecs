@@ -1,4 +1,4 @@
-﻿import type { ComponentMap } from '../component-definition';
+import type { ComponentMap } from '../component-definition';
 import type System from '../systems/system';
 import IterableSystem from '../systems/iterable-system';
 import type { Scheduler, SchedulerContext, SchedulerEffects, SchedulerUpdateResult } from './scheduler';
@@ -196,8 +196,12 @@ export default class ConflictScheduler<C extends ComponentMap = ComponentMap> im
 		const node = this.running.get(system);
 		const generation = this.generation;
 		return effects => {
-			if(!node || generation !== this.generation || !this.nodes.has(node)) {
+			if(generation !== this.generation || node && !this.nodes.has(node)) {
 				effects.discard();
+				return;
+			}
+			if(!node) {
+				effects.apply();
 				return;
 			}
 			node.effects = effects;

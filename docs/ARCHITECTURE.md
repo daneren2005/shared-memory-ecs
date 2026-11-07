@@ -326,3 +326,5 @@ Colocated `__tests__/` dirs; fixtures (sample components, workers, updates) in
 shim; concurrency regressions use `node-worker-adapter.ts` plus `controlled-node-worker.mjs`
 to exercise a real OS thread. `world-invariants.ts` checks live/deferred pool ownership at
 quiescent test points. Benchmarks live in `benchmarks/` and have a separate Vitest config.
+
+Directly requested worker runs have no scheduler node; their effects publish immediately, while a reset still discards stale replies.

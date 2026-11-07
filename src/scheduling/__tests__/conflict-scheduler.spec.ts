@@ -921,3 +921,18 @@ describe('conflict scheduler', () => {
 		expectTypeOf<'missing'>().not.toExtend<keyof Components>();
 	});
 });
+
+it.each([false, true])('publishes directly requested worker effects unless reset (reset=%s)', reset => {
+	const world = createWorld();
+	const scheduler = world.scheduler as ConflictScheduler<Components>;
+	const system = world.addSystem(new RecordingSystem(world, { name: 'Requested', reads: [], writes: [] }));
+	const receive = scheduler.prepareEffects(world, system);
+	const effects = { apply: vi.fn<() => void>(), discard: vi.fn<() => void>() };
+	if(reset) {
+		scheduler.reset();
+	}
+	receive(effects);
+	expect(effects.apply).toHaveBeenCalledTimes(reset ? 0 : 1);
+	expect(effects.discard).toHaveBeenCalledTimes(reset ? 1 : 0);
+	world.destroy();
+});
