@@ -1,7 +1,8 @@
 import { EntitySystem, EntityWorkerSystem, WorkerSystem } from '../../index';
-import type { BaseEntity, EntityWorkerSystemQuery } from '../../index';
+import type { BaseEntity, EntityQueryComponents, EntityUpdateFunction, EntityWorkerSystemQuery, UpdateEntityConfigObject } from '../../index';
+import createEntitySystemWorker, { type EntitySystemWorkerScope } from '../workers/create-entity-system-worker';
 import type EntitySystemWorkerMessage from '../workers/entity-system-worker-message';
-import { createTestWorld, type Components, type Config, type TestWorld } from '../../__tests__/fixtures/components';
+import { createTestWorld, type ComponentArrays, type Components, type Config, type TestWorld } from '../../__tests__/fixtures/components';
 import { eidsOf, listOf } from '../../__tests__/fixtures/entity-collections';
 
 const NOOP_WORKER_URL = new URL('../../__tests__/fixtures/noop.worker.ts', import.meta.url);
@@ -114,6 +115,125 @@ describe('world.load bulk membership', () => {
 		expect(eidsOf(system.entities)).toContain(spawned?.eid);
 	});
 
+	it('joins a bulk load without queueing delta rows', () => {
+		const system = world.addSystem(new QuerySystem(world, { required: ['health'], queries: { moving: { required: ['movement'] } } }));
+		let pending: Array<Array<number>> = [];
+
+		void world.load({ entities: ENTITIES }, {
+			onProgress: ({ phase, done }) => {
+				if(phase === 'systems' && done === 1) {
+					pending = [system.pendingAdded('___main'), system.pendingAdded('moving')];
+				}
+			},
+		});
+
+		expect(pending).toEqual([[], []]);
+		expect(system.entities.size).toBeGreaterThan(0);
+	});
+
+	it('leaves an entity removed after the join out of the load message', () => {
+		const system = world.addSystem(new QuerySystem(world, { required: ['health'] }));
+		const post = vi.spyOn(system.worker, 'postMessage');
+		let removed = 0;
+
+		void world.load({ entities: ENTITIES }, {
+			onProgress: ({ phase, done }) => {
+				if(phase === 'systems' && done === 1) {
+					const entity = listOf(system.entities)[0];
+					removed = entity.eid;
+					world.removeEntity(entity);
+				}
+			},
+		});
+
+		const load = findLoad(post.mock.calls);
+		expect(removed).toBeGreaterThan(0);
+		expect(load.entities.added.map(entity => entity.entityId)).not.toContain(removed);
+		expect(load.entities.added.map(entity => entity.entityId)).toEqual(eidsOf(system.entities));
+	});
+
+	it('sends only what changed on a later finishLoading', () => {
+		const system = world.addSystem(new QuerySystem(world, { required: ['health'] }));
+		void world.load({ entities: ENTITIES });
+		const post = vi.spyOn(system.worker, 'postMessage');
+
+		void system.finishLoading();
+		expect(findLoad(post.mock.calls).entities.added).toEqual([]);
+
+		post.mockClear();
+		const later = world.loadEntity({ maxHealth: 50 });
+		void system.finishLoading();
+		expect(findLoad(post.mock.calls).entities.added.map(entity => entity.entityId)).toEqual([later.eid]);
+	});
+
+	it('sends a real worker packed columns and transfers them', () => {
+		const worker = new RecordingWorker();
+		const system = world.addSystem(new QuerySystem(world, {
+			required: ['health'],
+			optional: ['movement'],
+			queries: { moving: { required: ['movement'] } },
+			forceMainThread: false,
+			getWorker: () => worker as unknown as Worker,
+		}));
+
+		void world.load({ entities: ENTITIES });
+
+		const { load, transfer } = worker.findLoad();
+		const members = listOf(system.entities);
+		const packed = load.entities.packedAdded;
+		expect(load.entities.added).toEqual([]);
+		expect(Array.from(packed?.entityIds ?? [])).toEqual(members.map(entity => entity.eid));
+		expect(Array.from(packed?.components.health ?? [])).toEqual(members.map(entity => entity.components.health?.index));
+		expect(Array.from(packed?.components.movement ?? [])).toEqual(members.map(entity => entity.components.movement?.index ?? -1));
+		expect(members.some(entity => !entity.components.movement)).toEqual(true);
+		expect(load.queries.moving.packedAdded?.entityIds.length).toEqual(system.queryEids('moving').length);
+		expect(new Set(transfer)).toEqual(new Set([
+			packed?.entityIds.buffer,
+			packed?.components.health.buffer,
+			packed?.components.movement.buffer,
+			load.queries.moving.packedAdded?.entityIds.buffer,
+			load.queries.moving.packedAdded?.components.movement.buffer,
+		]));
+	});
+
+	it('rebuilds packed rows in the worker as views over the shared blocks', () => {
+		const worker = new RecordingWorker();
+		const system = world.addSystem(new QuerySystem(world, {
+			required: ['health'],
+			optional: ['movement'],
+			queries: { moving: { required: ['movement'] } },
+			forceMainThread: false,
+			getWorker: () => worker as unknown as Worker,
+		}));
+		void world.load({ entities: ENTITIES });
+
+		let seeded: Array<UpdateEntityConfigObject<ComponentArrays>> = [];
+		let seededQueries: EntityQueryComponents<Components> = {};
+		const init: NonNullable<EntityUpdateFunction<Components, ComponentArrays>['init']> = (_world, _data, entities, queries) => {
+			seeded = entities;
+			seededQueries = queries;
+		};
+		const scope: EntitySystemWorkerScope = { onmessage: null, postMessage: () => {} };
+		createEntitySystemWorker<Components, ComponentArrays>(scope, Object.assign(() => {}, { init }));
+		scope.onmessage?.(new MessageEvent('message', { data: worker.findLoad().load }));
+
+		const members = listOf(system.entities);
+		expect(seeded.map(entity => entity.entityId)).toEqual(members.map(entity => entity.eid));
+		seeded.forEach((row, i) => {
+			const entity = members[i];
+			expect(row.components.health?.byteOffset).toEqual(entity.components.health?.block?.byteOffset);
+			expect('movement' in row.components).toEqual(!!entity.components.movement);
+		});
+		expect(seededQueries.moving.map(entity => entity.entityId)).toEqual(system.queryEids('moving'));
+
+		const block = members[0].components.health?.block;
+		if(!block) {
+			throw new Error('health block missing');
+		}
+		block[0] = 1234;
+		expect(seeded[0].components.health?.[0]).toEqual(1234);
+	});
+
 	it('goes back to per-entity checks once loading finishes', () => {
 		const system = world.addSystem(new QuerySystem(world, { required: ['health'] }));
 		void world.load({ entities: [{ maxHealth: 10 }] });
@@ -126,6 +246,36 @@ describe('world.load bulk membership', () => {
 		expect(eidsOf(system.entities)).toContain(other.eid);
 	});
 });
+
+type LoadMessage = Extract<EntitySystemWorkerMessage, { type: 'load' }>;
+
+function findLoad(calls: Array<Array<unknown>>): LoadMessage {
+	const load = calls.map(([message]) => message as EntitySystemWorkerMessage).find(message => message.type === 'load');
+	if(load?.type !== 'load') {
+		throw new Error('load not posted');
+	}
+	return load;
+}
+
+class RecordingWorker {
+	onmessage: ((event: MessageEvent) => void) | null = null;
+	onerror: unknown = null;
+	onmessageerror: unknown = null;
+	posted: Array<{ message: EntitySystemWorkerMessage, transfer: Array<Transferable> }> = [];
+
+	postMessage(message: EntitySystemWorkerMessage, transfer: Array<Transferable> = []): void {
+		this.posted.push({ message, transfer });
+	}
+	terminate(): void {}
+
+	findLoad(): { load: LoadMessage, transfer: Array<Transferable> } {
+		const posted = this.posted.find(({ message }) => message.type === 'load');
+		if(posted?.message.type !== 'load') {
+			throw new Error('load not posted');
+		}
+		return { load: posted.message, transfer: posted.transfer };
+	}
+}
 
 class HealthSystem extends EntitySystem<Components> {
 	updatedOnAdd: Array<number> = [];
@@ -140,7 +290,11 @@ class HealthSystem extends EntitySystem<Components> {
 }
 
 class QuerySystem extends EntityWorkerSystem<Components, {}> {
-	constructor(world: TestWorld, query: EntityWorkerSystemQuery<Components> & { queries?: { [key: string]: EntityWorkerSystemQuery<Components> } }) {
+	constructor(world: TestWorld, query: EntityWorkerSystemQuery<Components> & {
+		queries?: { [key: string]: EntityWorkerSystemQuery<Components> }
+		forceMainThread?: boolean
+		getWorker?: () => Worker
+	}) {
 		super(world, {
 			name: 'QuerySystem',
 			updateFunction: () => {},

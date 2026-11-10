@@ -13,6 +13,7 @@ import { buildWorkerComponent, buildWorkerEntity, type FactoryConfigs } from '..
 import type { WorkerEntityClassRegistry } from '../../entity-class';
 import QueryMembership from './query-membership';
 import EntityWorkBatchState from './entity-work-batch';
+import { expandPackedAdded } from './packed-membership';
 
 // The slice of the worker global scope createEntitySystemWorker touches. Passing `self` explicitly (rather than
 // using the global) lets runners like @vitest/web-worker, which inject `self` as a module local, drive it.
@@ -90,6 +91,8 @@ export default function createEntitySystemWorker<
 			factoryConfigs = message.factoryConfigs;
 			factoryClasses = message.factoryClasses;
 			addsComponents = !!message.addsComponents;
+			expandPackedAdded(message.entities, pools);
+			Object.values(message.queries).forEach(delta => expandPackedAdded(delta, pools));
 			entities.apply(message.entities as QueryDelta<T>);
 			const queries = applyQueryDeltas(message.queries);
 			worldExtension = updateFunction.init?.({ gameTime: message.gameTime, getString, heap }, message.data, entities.entries, queries) ?? undefined;

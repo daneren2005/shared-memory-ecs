@@ -12,8 +12,8 @@ export default class NodeWorkerAdapter {
 		});
 	}
 
-	postMessage(message: unknown): void {
-		this.worker.postMessage(message);
+	postMessage(message: unknown, transfer?: ReadonlyArray<Transferable>): void {
+		this.worker.postMessage(message, transfer as ReadonlyArray<ArrayBuffer>);
 	}
 
 	terminate(): void {

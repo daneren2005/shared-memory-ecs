@@ -1,6 +1,6 @@
 import type { MemoryHeapMemory, GrowBufferData } from '@daneren2005/shared-memory-objects/memory-heap';
 import type { WorldSharedMemory } from '../../world';
-import type { EntityWorkerSystemWorld, QueryDelta, WorkerComponentChange, WorkerCreatedEntity } from '../entity-worker-system';
+import type { EntityUpdateComponents, EntityWorkerSystemWorld, QueryDelta, WorkerComponentChange, WorkerCreatedEntity } from '../entity-worker-system';
 import type { WorkerEntityClassRegistry } from '../../entity-class';
 
 interface InitMessage {
@@ -33,8 +33,20 @@ interface LoadMessage<D = unknown> extends LoadDeltas {
 
 // Membership queued before load. Applied to the persistent lists on load; queryChanged never sees it.
 export interface LoadDeltas {
-	entities: QueryDelta
-	queries: { [key: string]: QueryDelta }
+	entities: LoadQueryDelta
+	queries: { [key: string]: LoadQueryDelta }
+}
+
+// A real worker's load rows arrive here rather than in `added`: a load can carry millions of block views, and
+// cloning those is what made seeding workers slow. The worker rebuilds them against its own pools.
+export interface LoadQueryDelta<T extends EntityUpdateComponents = EntityUpdateComponents> extends QueryDelta<T> {
+	packedAdded?: PackedEntities
+}
+
+export interface PackedEntities {
+	entityIds: Uint32Array<ArrayBuffer>
+	// Parallel to entityIds: each row's block index in that component's pool, -1 for an absent optional.
+	components: { [name: string]: Int32Array<ArrayBuffer> }
 }
 
 // A buffer the heap grew after load: forwarded so the worker's reconstructed heap keeps resolving new pointers.

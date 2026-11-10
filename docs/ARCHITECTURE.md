@@ -199,7 +199,10 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
   `init` in its constructor and the worker answers `init-complete`. `system.finishLoading()` then posts `load`
   carrying `getInitData()`'s result plus the pending main/sub-query deltas (flushed from `queryDeltas`); the worker
   applies them to its persistent lists, runs `updateFunction.init` and answers `loaded`, so every loaded entity is
-  cached before loading resolves. `queryChanged` never sees the load deltas. `world.init()`
+  cached before loading resolves. `queryChanged` never sees the load deltas. A bulk `addEntities` queues nothing in
+  `queryDeltas` and flags the next load message to read the membership maps instead. For a real worker, `added` goes
+  as transferred `PackedEntities` columns (eids plus one pool-index array per component, `packed-membership.ts`), and
+  the worker rebuilds `{ entityId, components }` from its pools; the main-thread fallback keeps the object form. `world.init()`
   awaits both in order, and `world.load()` re-runs `finishLoading` so a reused world re-seeds its workers;
   `load()` stays synchronous but returns that `finishLoading` promise.
 - **Sliced load:** `load()` runs a `loadSteps` generator (entities → linking → systems) that yields progress every

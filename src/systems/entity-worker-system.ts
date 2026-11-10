@@ -6,8 +6,9 @@ import type { BaseComponent, ComponentDefinitionMap, ComponentMap } from '../com
 import type { ComponentTypedArray } from '../memory-component';
 import System, { forEachInMatchingGroups, type EntityBatch, type SystemConfig } from './system';
 import type EntitySystemWorkerMessage from './workers/entity-system-worker-message';
-import type { EntityWorkBatch } from './workers/entity-system-worker-message';
+import type { EntityWorkBatch, LoadQueryDelta } from './workers/entity-system-worker-message';
 import EntitySystemWebWorker from './workers/entity-system-web-worker';
+import { getPackedTransferables, packEntities } from './workers/packed-membership';
 import type { SchedulerEffects } from '../scheduling/scheduler';
 
 const MAIN_QUERY_NAME = '___main';
@@ -43,6 +44,8 @@ export default abstract class EntityWorkerSystem<
 	// Membership changes since the last run(), flushed each run as a delta so a steady-state run sends empty
 	// arrays rather than re-transmitting every eid. The worker applies these to its own list (see applyQueryDelta).
 	private queryDeltas: { [key: string]: MembershipDelta<C> } = {};
+	// Set by a bulk join, which leaves its members out of queryDeltas: the next load message reads the membership maps.
+	private bulkMembershipPending = false;
 
 	addDataToWorld?(world: W): void;
 
@@ -285,15 +288,18 @@ export default abstract class EntityWorkerSystem<
 			resolve,
 		};
 
-		const queries: { [key: string]: QueryDelta<T> } = {};
+		const transfer: Array<Transferable> = [];
+		const queries: { [key: string]: LoadQueryDelta<T> } = {};
 		Object.entries(this.options.queries ?? {}).forEach(([queryKey, query]) => {
-			queries[queryKey] = this.buildQueryDelta(queryKey, query);
+			queries[queryKey] = this.buildLoadDelta(queryKey, query, this.queryEntities[queryKey], transfer);
 		});
+		const entities = this.buildLoadDelta(MAIN_QUERY_NAME, this.options, this.entities, transfer);
+		this.bulkMembershipPending = false;
 		const message: EntitySystemWorkerMessage<W, D> = {
 			type: 'load',
 			data: this.options.getInitData?.(),
 			gameTime: this.gameTime,
-			entities: this.buildQueryDelta(MAIN_QUERY_NAME, this.options),
+			entities,
 			queries,
 			// Only a real worker needs the buffers to rebuild a heap, plus the pools + eid counter to allocate off-thread.
 			heap: this.isWorkerThread ? this.world.heap.getSharedMemory() : undefined,
@@ -303,7 +309,11 @@ export default abstract class EntityWorkerSystem<
 			factoryClasses: this.isWorkerThread && this.options.createsEntities ? this.world.factory.getWorkerClasses() : undefined,
 			addsComponents: !!this.options.addsComponents,
 		};
-		this.worker.postMessage(message);
+		if(this.worker instanceof EntitySystemWebWorker) {
+			this.worker.postMessage(message);
+		} else {
+			this.worker.postMessage(message, transfer);
+		}
 
 		return promise;
 	}
@@ -325,6 +335,7 @@ export default abstract class EntityWorkerSystem<
 		this.entities.clear();
 		Object.values(this.queryEntities).forEach(list => list.clear());
 		this.queryDeltas = {};
+		this.bulkMembershipPending = false;
 		this.workPass = undefined;
 		this.timingBatch = undefined;
 
@@ -442,19 +453,29 @@ export default abstract class EntityWorkerSystem<
 		this.worker.postMessage(message);
 	}
 
-	private buildQueryDelta(queryName: string, query: EntityWorkerSystemQuery<C>): QueryDelta<T> {
+	private buildQueryDelta(queryName: string, query: EntityWorkerSystemQuery<C>, members?: EntityMembers<C>): QueryDelta<T> {
 		const delta = this.getQueryDelta(queryName);
 		const added: Array<UpdateEntityConfigObject<T>> = [];
-		delta.added.forEach(entity => {
+		for(const entity of (members ?? delta.added).values()) {
 			added.push({
 				entityId: entity.eid,
 				components: this.buildComponents(entity, query),
 			});
-		});
+		}
 		const removed = Array.from(delta.removed);
 		this.queryDeltas[queryName] = { added: new Set(), removed: new Set() };
 
 		return { added, removed };
+	}
+	private buildLoadDelta(queryName: string, query: EntityWorkerSystemQuery<C>, list: Map<number, BaseEntity<C>>, transfer: Array<Transferable>): LoadQueryDelta<T> {
+		const members = this.bulkMembershipPending ? list : this.getQueryDelta(queryName).added;
+		if(!this.isWorkerThread) {
+			return this.buildQueryDelta(queryName, query, members);
+		}
+
+		const packedAdded = packEntities(members, [...query.required, ...query.optional ?? []]);
+		transfer.push(...getPackedTransferables(packedAdded));
+		return { ...this.buildQueryDelta(queryName, query, new Set()), packedAdded };
 	}
 	private buildComponents(entity: BaseEntity<C>, query: EntityWorkerSystemQuery<C>): T {
 		const components = {} as T;
@@ -552,22 +573,21 @@ export default abstract class EntityWorkerSystem<
 			return;
 		}
 
+		this.bulkMembershipPending = true;
 		if(this.tracksMainQuery) {
-			this.addBatchToQuery(MAIN_QUERY_NAME, this.entities, this.options, batch);
+			this.addBatchToQuery(this.entities, this.options, batch);
 		}
 		Object.entries(this.options.queries ?? {}).forEach(([queryName, query]) => {
 			const queryList = this.queryEntities[queryName] ?? (this.queryEntities[queryName] = new Map());
-			this.addBatchToQuery(queryName, queryList, query, batch);
+			this.addBatchToQuery(queryList, query, batch);
 		});
 	}
-	private addBatchToQuery(queryName: string, list: Map<number, BaseEntity<C>>, query: EntityWorkerSystemQuery<C>, batch: EntityBatch<C>) {
-		const delta = this.getQueryDelta(queryName);
+	private addBatchToQuery(list: Map<number, BaseEntity<C>>, query: EntityWorkerSystemQuery<C>, batch: EntityBatch<C>) {
 		forEachInMatchingGroups(batch, entity => this.matchesComponents(entity, query), entity => {
 			if(entity.components.entity.dead || (query.filter && !query.filter(entity))) {
 				return;
 			}
 			list.set(entity.eid, entity);
-			this.markAdded(delta, entity);
 		});
 	}
 
@@ -672,6 +692,7 @@ interface MembershipDelta<C extends ComponentMap> {
 	added: Set<BaseEntity<C>>
 	removed: Set<number>
 }
+type EntityMembers<C extends ComponentMap> = Map<number, BaseEntity<C>> | Set<BaseEntity<C>>;
 
 // Low-level off-thread allocation primitives, injected onto the worker `world` each run. `allocateEid` mints a
 // heap-unique id; `allocateComponentBlock` pushes a block into a component's shared pool and returns its index.

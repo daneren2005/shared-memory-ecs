@@ -1,4 +1,6 @@
 import { parentPort } from 'node:worker_threads';
+import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
+import SharedPool from '@daneren2005/shared-memory-objects/shared-pool';
 
 if(!parentPort) {
 	throw new Error('controlled-node-worker must run in a worker thread');
@@ -26,6 +28,22 @@ function applyDelta(delta) {
 	}
 }
 
+function expandPackedAdded(message) {
+	const heap = new MemoryHeap(message.heap);
+	const { entityIds, components } = message.entities.packedAdded;
+	const names = Object.keys(components);
+	const pools = names.map(name => new SharedPool(heap, message.sharedMemory.components[name]));
+	message.entities.added = Array.from(entityIds, (entityId, row) => {
+		const blocks = {};
+		names.forEach((name, column) => {
+			if(components[name][row] !== -1) {
+				blocks[name] = pools[column].at(components[name][row]);
+			}
+		});
+		return { entityId, components: blocks };
+	});
+}
+
 parentPort.on('message', message => {
 	if(message.type === 'init') {
 		parentPort.postMessage({ type: 'init-complete' });
@@ -33,6 +51,7 @@ parentPort.on('message', message => {
 	}
 	if(message.type === 'load') {
 		control = message.data.control;
+		expandPackedAdded(message);
 		applyDelta(message.entities);
 		parentPort.postMessage({ type: 'loaded' });
 		return;
