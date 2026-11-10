@@ -140,21 +140,8 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 	}
 
 	load(config: Cfg) {
-		const props = config as Record<string, unknown>;
-		const registry = this.world.registry as RegisteredComponentRegistry<C>;
-		for(let name of Object.keys(registry) as Array<keyof C>) {
-			if(name === 'entity') {
-				continue;
-			}
-			if(!this.isComponentAllowed(name)) {
-				continue;
-			}
-
-			const definition = registry[name];
-			if(definition.loadInFinishLoading) {
-				continue;
-			}
-			if(definition.loadProperties.some(prop => prop in props)) {
+		for(const { name } of this.world.componentTriggers.forLoad(config as object)) {
+			if(this.isComponentAllowed(name)) {
 				this.loadComponent(name, config, false);
 			}
 		}
@@ -184,18 +171,8 @@ export default class BaseEntity<C extends ComponentMap = ComponentMap, Cfg = any
 			return;
 		}
 
-		const props = config as Record<string, unknown>;
-		const registry = this.world.registry as RegisteredComponentRegistry<C>;
-		for(let name of Object.keys(registry) as Array<keyof C>) {
-			if(name === 'entity') {
-				continue;
-			}
-			if(!this.isComponentAllowed(name)) {
-				continue;
-			}
-
-			const definition = registry[name];
-			if(definition.loadInFinishLoading && definition.loadProperties.some(prop => prop in props)) {
+		for(const { name } of this.world.componentTriggers.forFinishLoading(config)) {
+			if(this.isComponentAllowed(name)) {
 				this.loadComponent(name, config, false);
 			}
 		}

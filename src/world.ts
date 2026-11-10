@@ -6,6 +6,7 @@ import type { SharedAllocatedMemory } from '@daneren2005/shared-memory-objects/a
 import type { SharedPoolMemory } from '@daneren2005/shared-memory-objects/shared-pool';
 import { MAX_BYTE_OFFSET_LENGTH } from '@daneren2005/shared-memory-objects/utils/pointer';
 import MemoryComponent from './memory-component';
+import ComponentTriggerIndex from './component-trigger-index';
 import ConstantStringCache from './constant-string-cache';
 import type BaseEntity from './entity';
 import type System from './systems/system';
@@ -114,6 +115,7 @@ export default class BaseWorld<
 	// the main thread or inside a worker.
 	private eidCounter: AllocatedMemory;
 	registry: RegisteredComponentRegistry<C> & { entity: RegisteredComponentDefinition<EntityComponent> };
+	readonly componentTriggers: ComponentTriggerIndex;
 	factory: EntityFactory<C, Cfg, E>;
 
 	// Keyed by eid: entities leave from the middle one at a time (every death), so a Map deletes in constant
@@ -164,6 +166,7 @@ export default class BaseWorld<
 			};
 		}
 		this.registry = registry_ as RegisteredComponentRegistry<C> & { entity: RegisteredComponentDefinition<EntityComponent> };
+		this.componentTriggers = new ComponentTriggerIndex(this.registry);
 
 		this.factory = options.factory ?? new EntityFactory<C, Cfg, E>();
 		this.factory.setWorld(this);
