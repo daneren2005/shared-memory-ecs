@@ -1,5 +1,5 @@
 import MemoryHeap from '@daneren2005/shared-memory-objects/memory-heap';
-import { System, killEntity, EntityFactory } from '../index';
+import { System, killEntity, EntityFactory, configComponents } from '../index';
 import { createTestWorld, type Components, type Config, type TestWorld } from './fixtures/components';
 import { listOf } from './fixtures/entity-collections';
 import { findWorldInvariantViolations } from './fixtures/world-invariants';
@@ -22,6 +22,18 @@ describe('world eid allocation', () => {
 			ids.add(workerAllocate());
 		}
 		expect(ids.size).toEqual(200);
+	});
+});
+
+describe('configComponents', () => {
+	it('lists the components a config loads after merging its type template', () => {
+		const world = createTestWorld(new EntityFactory<Components, Config>({
+			'Space Ship': { maxHealth: 10 },
+		}));
+		expect(configComponents(world, { type: 'Space Ship' })).toEqual(['health']);
+		expect(configComponents(world, { type: 'Space Ship', speed: 0, countsNeighbors: true })).toEqual(['health', 'movement', 'neighbors']);
+		expect(configComponents(world, {})).toEqual([]);
+		world.destroy();
 	});
 });
 

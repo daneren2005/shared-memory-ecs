@@ -38,6 +38,7 @@ Run type-check and lint after every edit (AGENTS.md).
 | `entity-factory.ts` | `EntityFactory<C,Cfg,E>`: maps immutable type → template, merges instance data, resolves immutable class from the template, validates component triggers (against a per-class cached set of forbidden load properties; the registry scan only runs to build the error message), and constructs the registered wrapper with its allowlist. It also creates pre-minted shells for worker adoption and serializes class metadata for entity-creating workers. Classless factories retain the original path. |
 | `component-definition.ts` | All the component/registry types: `ComponentDefinition` — a component is built in two required halves, `toBlock(config, entity?)` (worker-safe config→block-values map) + `attach(entity, memory, index, config?)` (accessor over that block); loading is `attach(entity, memory, memory.create(toBlock(config)), config)`, and a worker calls only `toBlock`. `config` lets `attach` seed main-thread-only state kept off the block; adoption passes none. Plus the optional `free(component)` teardown hook, `save(component)`, and `died(component, entity, world)` (fires once on the main thread when the entity dies, before its blocks are freed — see Entity death). `BaseComponent`, `ComponentMap`, `ComponentRegistry`, `RegisteredComponentDefinition`, and the derivations `ComponentsOf` (from `attach`'s return, intersected with `BaseComponent`) / `EntityConfigOf` that infer `C`/`Cfg` from a registry. |
 | `component-trigger-index.ts` | `ComponentTriggerIndex`: built once per world, maps each `loadProperty` to the components it triggers (immediate and `loadInFinishLoading` separately). `BaseEntity.load`/`finishLoading` walk the config's keys through it and load the hits in registry order. Internal; not exported. |
+| `config-components.ts` | `configComponents(world, config)`: the components a creation config would load once merged with its type template (trigger hits, filtered by the class allowlist). Games use it to build `createsEntities` lists from templates. |
 | `component.ts` | `Component<T>` base class an `attach` returns (`new YourComponent(block, index)`): holds `block`/`index` fields, subclass adds prototype get/set over `this.block`. One shared hidden class per component type keeps reads monomorphic/inlinable and construction a single allocation (vs a closure per accessor). `attach` may still return a plain object; the entity layer fills in `block` either way. |
 | `memory-component.ts` | `MemoryComponent`: a pool of same-sized blocks in the heap (`create`/`getBlock`/`get`/`set`/`delete`/`clear`). Backed by a `SharedPool` (all bookkeeping in the heap), so a worker can reconstruct a handle over the same pool (`MemoryComponent.fromSharedMemory` / owner's `getSharedMemory()`) and allocate/read blocks off-thread — lockless except a spin-lock guarding rare chunk growth. Backing type is `ComponentTypedArray`. |
 | `performance-timing.ts` | `PerformanceTiming`: hooks world events, emits `stats-updated` snapshots (`update` / per-system `run`+`events` / `events`). Accumulates batched worker computation and effect times into one sample per pass, retaining partial totals across flushes. Non-invasive. `autoUpdate: false` plus public `flush()` lets an external reporting clock close all timing windows together, including while paused. |
@@ -288,17 +289,18 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
   `EntityWorkerSystem.checkAddEntity` upserts even an entity whose membership did not change, so adding/removing an
   optional component rebuilds and re-sends that existing entity's complete component bundle. Worker update functions
   use `addComponentWorker`/`removeComponentWorker`; changes are collected during a stable run snapshot, applied on
-  run-complete, and become worker-visible through the next query delta. Addition requires `addsComponents: true` and
+  run-complete, and become worker-visible through the next query delta. Addition requires `addsComponents` and
   component definitions in the worker entry; it uses the same spare-buffer safeguard as worker entity creation.
 
 ## Conventions / gotchas
 
 - **System access:** generic `SystemConfig<C>` adds optional typed `reads`, `writes`, and `exclusive`.
   Runtime `System.readComponents` exposes declared reads; `EntitySystem` adds its component query and
-  `entity`, and `EntityWorkerSystem` adds required/optional components from its main and named queries
-  plus `entity`. `reads` adds access outside queries; unknown reads or omitted `writes` reserve the whole
+  `entity`, and `EntityWorkerSystem` adds required/optional/not components from its main and named queries
+  plus `entity` (exclusions decide membership, so structural changes to them must be ordered). `reads` adds access outside queries; unknown reads or omitted `writes` reserve the whole
   batch in `ConflictScheduler`. `writes: []` explicitly opts into read-only access. Boolean `createsEntities: true` and
-  component allocation via `addsComponents` force `requiresExclusiveScheduling`; a typed
+  `addsComponents: true` force `requiresExclusiveScheduling`; a typed `addsComponents: [...]` list is exposed as
+  `System.addedComponents` and merged into the system's writes; a typed
   `createsEntities: [...]` list enables parallel creation and adds the built-in `entity` to publication
   access. Query membership conflicts compare every required component of each main/named query against
   the creator's possible components; optional/not keys do not make an otherwise unrelated query conflict.

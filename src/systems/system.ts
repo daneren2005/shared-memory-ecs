@@ -106,6 +106,9 @@ export default abstract class System<C extends ComponentMap = ComponentMap> exte
 	get createdComponents(): ReadonlyArray<PropertyKey> {
 		return [];
 	}
+	get addedComponents(): ReadonlyArray<PropertyKey> {
+		return [];
+	}
 	get creationReadComponents(): ReadonlyArray<PropertyKey> | undefined {
 		return this.readComponents;
 	}

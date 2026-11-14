@@ -11,7 +11,7 @@ export default function addComponentWorker<C extends ComponentMap, K extends key
 	callbacks: EntityWorkerSystemCallbacks<C>,
 ): void {
 	if(!world.buildComponentDescriptor) {
-		throw new Error('addComponentWorker requires addsComponents: true and the component registry passed to createEntitySystemWorker');
+		throw new Error('addComponentWorker requires addsComponents and the component registry passed to createEntitySystemWorker');
 	}
 
 	callbacks.addComponent(entityId, world.buildComponentDescriptor(String(componentName), config));

@@ -280,7 +280,8 @@ group are still running. Actual dispatch can also overlap independent work from 
 
 `writes` lists every component a system changes, including components reached outside its main query.
 Use `writes: []` for a read-only system. Reads are inferred from `EntitySystem.components` and from worker
-`required`, `optional`, and all named `queries`. The built-in `entity` component is also a read. Add
+`required`, `optional`, `not`, and all named `queries`. The built-in `entity` component is also a read.
+Exclusions count because adding or removing an excluded component changes query membership. Add
 `reads: ['otherComponent']` for access outside those queries, including filters and hooks. A plain
 `System` or `IterableSystem` supplies both `reads` and `writes`; an `EntitySystem` without a component
 query supplies `reads` explicitly. Component names are checked against the system's component type.
@@ -288,12 +289,16 @@ query supplies `reads` explicitly. Component names are checked against the syste
 Omitting `writes`, or leaving reads unknown, makes a system exclusive. `exclusive: true` also reserves
 exclusive execution for a system whose callbacks, structural changes, or shared resources cannot be
 described through component access. Workers with `createsEntities: true` or `addsComponents: true` remain
-exclusive. Declare writes to `entity` when changing its flags; arbitrary callback effects still need
+exclusive. A component list such as `addsComponents: ['onFire']` instead schedules each listed
+component as a write, so the system is ordered against readers, writers, and exclusions of what it adds.
+List every component the system can add through `addComponentWorker`. Declare writes to `entity` when changing its flags; arbitrary callback effects still need
 explicit declarations or exclusive execution.
 
 For parallel worker creation, `EntityWorkerSystem` and `WorkerSystem` accept a component list in the
 existing capability option, for example `createsEntities: ['health', 'movement']`. List every game
-component the system can create, including components supplied by factory templates. The built-in
+component the system can create, including components supplied by factory templates.
+`configComponents(world, { type: 'rock', x: 0, y: 0 })` returns the components a creation config loads after
+merging its template; only key presence matters, so placeholder values are enough. The built-in
 `entity` component is included automatically. `writes` still declares changes to existing components;
 creation declarations do not authorize undeclared callback or attachment effects on existing data.
 Both boolean and list forms enable the same worker allocator, factory templates, and stable atomic eids.
@@ -830,7 +835,8 @@ safety described below.
 
 Worker-side addition needs two opt-ins because it allocates a block:
 
-- Set `addsComponents: true` on the `EntityWorkerSystem`.
+- Set `addsComponents: true` on the `EntityWorkerSystem`, or a list of the components it adds so
+  `ConflictScheduler` can run it in parallel with unrelated systems.
 - Pass the component registry to that system's `createEntitySystemWorker(self, update, registry)` call.
 
 `addComponentWorker` calls the definition's worker-safe `toBlock(config)` and cannot add the always-present

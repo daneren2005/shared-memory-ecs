@@ -593,6 +593,33 @@ describe('conflict scheduler', () => {
 		}
 	});
 
+	it('schedules an addsComponents list as writes ordered against readers and exclusions of those components', () => {
+		const world = createWorld();
+		const scheduler = world.scheduler as ConflictScheduler<Components>;
+		const adder = world.addSystem(new (class extends EntityWorkerSystem<Components, {}> {})(world, {
+			name: 'Adder', required: ['neighbors'], writes: [], addsComponents: ['health'], forceMainThread: true,
+			updateFunction: () => {}, getWorker: () => {
+				throw new Error('fallback');
+			},
+		}));
+		const query = (name: string, options: Pick<EntityWorkerSystemConfig<Components, {}>, 'required' | 'not'>) =>
+			world.addSystem(new (class extends EntityWorkerSystem<Components, {}> {})(world, {
+				name, ...options, writes: [], forceMainThread: true,
+				updateFunction: () => {}, getWorker: () => {
+					throw new Error('fallback');
+				},
+			}));
+		const reader = query('Reader', { required: ['health'] });
+		const excluder = query('Excluder', { required: ['movement'], not: ['health'] });
+		const unrelated = query('Unrelated', { required: ['movement'] });
+		try {
+			expect(adder.requiresExclusiveScheduling).toBe(false);
+			expect(scheduler.schedule.batches).toEqual([[adder, unrelated], [reader, excluder]]);
+		} finally {
+			world.destroy();
+		}
+	});
+
 	it.each([
 		{ reads: ['health'] },
 		{ writes: ['health'] },

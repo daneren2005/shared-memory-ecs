@@ -363,14 +363,19 @@ export default abstract class EntityWorkerSystem<
 	}
 	get readComponents(): ReadonlyArray<PropertyKey> {
 		const queries = [this.options, ...Object.values(this.options.queries ?? {})];
-		return ['entity', ...this.reads ?? [], ...queries.flatMap(query => [...query.required, ...query.optional ?? []])];
+		// Exclusions decide membership, so adding or removing one must be ordered like a read.
+		return ['entity', ...this.reads ?? [], ...queries.flatMap(query => [...query.required, ...query.optional ?? [], ...query.not ?? []])];
 	}
 	get requiresExclusiveScheduling(): boolean {
-		return super.requiresExclusiveScheduling || this.options.createsEntities === true || !!this.options.addsComponents;
+		return super.requiresExclusiveScheduling || this.options.createsEntities === true || this.options.addsComponents === true;
 	}
 	get createdComponents(): ReadonlyArray<PropertyKey> {
 		const components = this.options.createsEntities;
 		return components && typeof components !== 'boolean' ? ['entity', ...components] : [];
+	}
+	get addedComponents(): ReadonlyArray<PropertyKey> {
+		const components = this.options.addsComponents;
+		return components && typeof components !== 'boolean' ? components : [];
 	}
 	get creationReadComponents(): ReadonlyArray<PropertyKey> {
 		const queries = Object.values(this.options.queries ?? {});
@@ -785,7 +790,8 @@ export interface EntityWorkerSystemConfig<
 	createsEntities?: boolean | ReadonlyArray<keyof C>
 	// Opt in to worker-side component allocation through addComponentWorker. The worker entry must also pass the
 	// component registry to createEntitySystemWorker so the worker has each component's toBlock().
-	addsComponents?: boolean
+	// A component list is scheduled as writes to those components by ConflictScheduler; true stays exclusive there.
+	addsComponents?: boolean | ReadonlyArray<keyof C>
 
 	queries?: { [key: string]: EntityWorkerSystemQuery<C> }
 }

@@ -73,7 +73,7 @@ export default class ConflictScheduler<C extends ComponentMap = ComponentMap> im
 				reads: new Set(reads),
 				creationReads: new Set(queries === undefined ? system.creationReadComponents : system.reads),
 				creationQueries: queries?.map(query => Array.from(query)),
-				writes: new Set(system.writes),
+				writes: new Set([...system.writes ?? [], ...system.addedComponents]),
 				creates: new Set(system.createdComponents),
 				exclusive: system.requiresExclusiveScheduling || reads === undefined || system.writes === undefined,
 			};
