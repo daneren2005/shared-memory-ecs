@@ -508,10 +508,10 @@ itself. Both are optional properties on the `EntityUpdateFunction`.
 (structured-cloned across the boundary) and returns a `Partial<W>` that is merged onto `world` on every
 subsequent run. The same `load` message also carries the system's current query membership, so the worker has
 every loaded entity cached before `finishLoading()` resolves. `init(world, data, entities, queries)` receives those
-populated lists plus a base `world` with `gameTime`, `getString` and `heap` (no `elapsedTime` or callbacks: init
+populated lists plus a base `world` with `gameTime`, `getString`, `heap` and `random` (no `elapsedTime` or callbacks: init
 seeds worker state and must not modify entities); that initial membership never reaches `queryChanged`, so build any index over the loaded entities
 in `init`. Use it for state that must be seeded from the main thread but then persist inside the worker
-— a seeded RNG, a lookup table, a config object — without paying to re-send it each frame. Type the init
+— a lookup table, a config object — without paying to re-send it each frame. Type the init
 data with the `D` type parameter (the fourth on `EntityUpdateFunction` / `EntityWorkerSystem`) so `getInitData`
 and the `init` hook agree on its shape; it defaults to `unknown` when a system has no init data:
 
@@ -998,6 +998,36 @@ digit except the last comes from `` PQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|
 value are left out. `int` values are zigzag encoded (`n >= 0 ? 2n : -2n - 1`), booleans are 0 or 1, and a `float32` is
 the varint of its 32 IEEE 754 bits. A `string` is a varint length in UTF-16 code units followed by the raw characters,
 which may be any character; length 0 means `null`, and empty strings stay objects.
+
+### Seeded randomness
+
+`world.random` is a seeded generator stored in the world's shared memory. The main thread and every worker
+(`world.random` inside update functions and `init`) draw from the same stream with no lock: each draw atomically
+claims the next position and encrypts it with Philox4x32-10 keyed by the seed, so two threads drawing at once
+never share a position. Philox is the counter-based generator from Random123 (also used by numpy and cuRAND)
+and passes the BigCrush and PractRand test suites.
+
+```ts
+world.random.next();     // [0, 1) with 53 bits of precision, like Math.random
+world.random.int(1, 7);  // integer in [1, 7)
+world.random.uint32();   // raw 32-bit value
+```
+
+Every `world.load()` seeds it from the config's `random` before any entity loads:
+
+```ts
+await world.load({ entities });                          // fresh random seed
+await world.load({ entities, random: { seed: 1234 } });  // chosen seed (integer up to 2^53), e.g. a shared map seed
+
+// Saving the state stops save scumming: reloading replays the same upcoming values.
+const save = { entities, gameTime: world.gameTime, random: world.random.getState() }; // { seed, position }
+await world.load(save);
+```
+
+Leave `random` out of the save if you don't care; each load then gets a new random seed.
+
+The stream is reproducible, but when several threads draw at the same time, which thread gets which value depends
+on timing. A save restores what comes next, not which system draws it.
 
 ## Measuring performance
 

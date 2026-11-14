@@ -22,6 +22,7 @@ import { entityDefinition, type EntityComponent } from './entity-component';
 import EntityFactory from './entity-factory';
 import { decompressEntityConfig, type CompressedEntities } from './entity-compression';
 import DefaultScheduler from './scheduling/default-scheduler';
+import SharedRandom, { RANDOM_STATE_LENGTH, randomSeed, type RandomConfig } from './shared-random';
 import type { Scheduler, SchedulerUpdateResult } from './scheduling/scheduler';
 
 const DEFAULT_HEAP_SIZE = MAX_BYTE_OFFSET_LENGTH;
@@ -64,6 +65,8 @@ export interface WorldConfig<Cfg = any> {
 	gameTime?: number
 	playerTime?: number
 	timeScale?: number
+	// A save's world.random.getState() replays its upcoming values; `{ seed }` alone starts a new stream. Omitted picks a random seed.
+	random?: RandomConfig
 }
 
 // A save whose entities may be strings packed by compressEntities; load expands them with the bundled definitions.
@@ -100,6 +103,7 @@ const LOAD_CHECK_INTERVAL = 256;
 export interface WorldSharedMemory {
 	components: { [name: string]: SharedPoolMemory }
 	eidCounter: SharedAllocatedMemory
+	random: SharedAllocatedMemory
 }
 
 export default class BaseWorld<
@@ -114,6 +118,9 @@ export default class BaseWorld<
 	// Single heap-backed counter every thread bumps atomically, so eids stay unique whether an entity is created on
 	// the main thread or inside a worker.
 	private eidCounter: AllocatedMemory;
+	private randomMemory: AllocatedMemory;
+	// Seeded and shared with every worker; draws from any thread never repeat.
+	readonly random: SharedRandom;
 	registry: RegisteredComponentRegistry<C> & { entity: RegisteredComponentDefinition<EntityComponent> };
 	readonly componentTriggers: ComponentTriggerIndex;
 	factory: EntityFactory<C, Cfg, E>;
@@ -153,6 +160,10 @@ export default class BaseWorld<
 		this.heap = new MemoryHeap({ bufferSize: options.heapSize ?? DEFAULT_HEAP_SIZE });
 		this.constantStrings = new ConstantStringCache(this.heap);
 		this.eidCounter = this.heap.allocUI32(1);
+		this.randomMemory = this.heap.allocUI32(RANDOM_STATE_LENGTH);
+		this.random = new SharedRandom(this.randomMemory.data);
+		// load() reseeds; this only covers a world used without one.
+		this.random.setState({ seed: randomSeed() });
 		// A grown buffer must reach every worker's reconstructed heap so pointers into it still resolve.
 		this.heap.addOnGrowBufferHandlers((data: GrowBufferData) => this.emit('grow-buffer', data));
 
@@ -187,6 +198,7 @@ export default class BaseWorld<
 		return {
 			components,
 			eidCounter: this.eidCounter.getSharedMemory(),
+			random: this.randomMemory.getSharedMemory(),
 		};
 	}
 	// A buffer that was grown inside a worker: adopt it into the main heap (if not already present) and fan it out to
@@ -297,6 +309,9 @@ export default class BaseWorld<
 		for(let entityClass of Object.keys(this.factory.classes)) {
 			this.constantStrings.getOrCreate(entityClass);
 		}
+
+		// Before entities load, so draws made while loading are part of the restored stream.
+		this.random.setState(config.random ?? { seed: randomSeed() });
 
 		this.isLoading = true;
 		const steps = this.loadSteps(config);

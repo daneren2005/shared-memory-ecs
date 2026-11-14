@@ -12,6 +12,8 @@ import { typeReadUpdate, TYPE_READ_EVENT } from '../../__tests__/fixtures/type-r
 import { errorUpdate, POISON_MAX_HEALTH, type ErrorWorld } from '../../__tests__/fixtures/error-update';
 import { componentChangeUpdate, type ComponentChangeWorld } from '../../__tests__/fixtures/component-change-update';
 import { queryChangedUpdate, INITIAL_ENTITIES_EVENT, QUERY_ADDED_EVENT, QUERY_REMOVED_EVENT, TRACKED_EVENT, type QueryChangedWorld } from '../../__tests__/fixtures/query-changed-update';
+import { randomUpdate, RANDOM_DRAWN_EVENT } from '../../__tests__/fixtures/random-update';
+import SharedRandom, { RANDOM_STATE_LENGTH } from '../../shared-random';
 import type { SystemError } from '../../index';
 
 // Worker entry points loaded by @vitest/web-worker for the 'worker' mode below.
@@ -21,7 +23,8 @@ const KILL_WORKER_URL = new URL('../../__tests__/fixtures/kill.worker.ts', impor
 const SPAWN_WORKER_URL = new URL('../../__tests__/fixtures/spawn.worker.ts', import.meta.url);
 const QUERY_TARGET_WORKER_URL = new URL('../../__tests__/fixtures/query-target.worker.ts', import.meta.url);
 const TYPE_READ_WORKER_URL = new URL('../../__tests__/fixtures/type-read.worker.ts', import.meta.url);
-const ERROR_WORKER_URL = new URL('../../__tests__/fixtures/error.worker.ts', import.meta.url);
+const RANDOM_WORKER_URL = new URL('../../__tests__/fixtures/random.worker.ts', import.meta.url);
+const ERROR_WORKER_URL =new URL('../../__tests__/fixtures/error.worker.ts', import.meta.url);
 const COMPONENT_CHANGE_WORKER_URL = new URL('../../__tests__/fixtures/component-change.worker.ts', import.meta.url);
 const QUERY_CHANGED_WORKER_URL = new URL('../../__tests__/fixtures/query-changed.worker.ts', import.meta.url);
 
@@ -336,6 +339,25 @@ describe.each(MODES)('entity-worker-system (%s)', (mode) => {
 			expect(seen.get(ship1.eid)).toEqual('Space Ship');
 			expect(seen.get(ship2.eid)).toEqual('Space Ship');
 			expect(seen.get(miner.eid)).toEqual('Miner');
+		});
+
+		it('draws from the world\'s shared random stream', async () => {
+			let system = useSystem(new RandomSystem(world, mode));
+			await initSystem(system);
+
+			let entities = [createEntity({ maxHealth: 10 }), createEntity({ maxHealth: 10 })];
+			let drawn: Array<number> = [];
+			entities.forEach(entity => entity.on(RANDOM_DRAWN_EVENT, (value: number) => drawn.push(value)));
+
+			const state = world.random.getState();
+			const mainValue = world.random.uint32();
+			system.run(16);
+			await flush();
+
+			const replay = new SharedRandom(new Uint32Array(RANDOM_STATE_LENGTH));
+			replay.setState(state);
+			expect([mainValue, ...drawn]).toEqual([replay.uint32(), replay.uint32(), replay.uint32()]);
+			expect(world.random.getState().position).toEqual(state.position + 3);
 		});
 
 		// PerformanceTiming is driven off these two events, so both backends must report a run.
@@ -1025,6 +1047,18 @@ class TypeReadSystem extends EntityWorkerSystem<Components, { entity: Uint32Arra
 			updateFunction: typeReadUpdate,
 			forceMainThread: mode === 'main-thread',
 			getWorker: () => new Worker(TYPE_READ_WORKER_URL, { type: 'module' }),
+		});
+	}
+}
+
+class RandomSystem extends EntityWorkerSystem<Components, { entity: Uint32Array }> {
+	constructor(world: TestWorld, mode: Mode) {
+		super(world, {
+			name: 'RandomSystem',
+			required: ['entity'],
+			updateFunction: randomUpdate,
+			forceMainThread: mode === 'main-thread',
+			getWorker: () => new Worker(RANDOM_WORKER_URL, { type: 'module' }),
 		});
 	}
 }

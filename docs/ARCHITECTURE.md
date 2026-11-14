@@ -33,6 +33,7 @@ Run type-check and lint after every edit (AGENTS.md).
 | `entity.ts` | `BaseEntity<C,Cfg>`: immutable eid plus `id`/`type`/`dead` accessors and a component bag; load/save/deferred load, component attach/remove/mutation, and teardown. A factory class wrapper supplies a shared allowed-component set; normal load, deferred load, direct attachment, and worker adoption enforce it. Attached components cache their block views, and teardown defers block/free-hook work safely. |
 | `entity-component.ts` | The always-present four-slot `entity` component (`dead`, `isStatic`, immutable `type`, immutable `class`), all worker-visible. Type and class are pointers to interned `ConstantString`s. Exports `DEAD_INDEX`, `STATIC_INDEX`, `TYPE_INDEX`, `CLASS_INDEX`, and `entityDefinition`. Save persists type; class is recovered from that type's template. |
 | `constant-string-cache.ts` | `ConstantStringCache`: interns immutable strings (from `@daneren2005/shared-memory-objects`'s `ConstantString`) in the heap and resolves a stored pointer back to its string. `getOrCreate(value)` dedupes so identical values share one allocation; `getString(pointer)` is a Map hit before rebuilding from memory. The main thread creates+interns (`world.constantStrings`); each worker reconstructs its own cache over the same buffers to resolve pointers. |
+| `shared-random.ts` | `SharedRandom`: lock-free Philox4x32-10 over a 4-slot heap `Uint32Array` (53-bit seed low/high as the key, 64-bit position low/high as the counter). Each draw `Atomics.add`s the position and encrypts it, so concurrent draws never share a counter; one block yields `uint32()` or a 53-bit `next()`. `getState`/`setState` (`{ seed, position }`, position optional) for saves. World owns one (`world.random`), seeded on every `load()`; workers rebuild it from `WorldSharedMemory.random`. |
 | `entity-class.ts` | Entity-class constructor/definition types plus `defineEntityClasses`/`defineEntityConfigs` inference helpers. A class maps to one wrapper constructor and an allowed component-key tuple; scoped template config types derive from those definitions. Worker metadata contains component names only, never constructors. |
 | `entity-compression.ts` | Save compression: `EntityCompressor`/`compressEntities` pack flat configs that fit a definition (`int`/`uint` with optional step/decimals/offset, `boolean`, bit-exact `float32`, and length-prefixed `string`) into JSON-safe base-45 varint strings, and `decompressEntity`/`decompressEntities` expand them. Configs that don't fit stay objects. Each type gets the next key; a definition listing `types` shares one property list across consecutive keys, stored once under its first key. Only the used definitions are bundled in the save as `entityDefinitions`. Decoding resolves shared definitions to a per-key map, cached per definitions object. |
 | `entity-factory.ts` | `EntityFactory<C,Cfg,E>`: maps immutable type → template, merges instance data, resolves immutable class from the template, validates component triggers (against a per-class cached set of forbidden load properties; the registry scan only runs to build the error message), and constructs the registered wrapper with its allowlist. It also creates pre-minted shells for worker adoption and serializes class metadata for entity-creating workers. Classless factories retain the original path. |
@@ -118,7 +119,8 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
   stays on the fast path.
 - **Save:** `entity.save()` merges each component's `save()` (Serialization slice only;
   Config comes back from the factory template) → flat `Cfg`. `world` config is
-  `{ entities: Cfg[], gameTime?, playerTime?, timeScale? }`. `entity-compression.ts` (`compressEntities`,
+  `{ entities: Cfg[], gameTime?, playerTime?, timeScale?, random? }`; `random` (`{ seed, position? }`) seeds
+  `world.random` before entities load, and omitting it picks a fresh random seed. `entity-compression.ts` (`compressEntities`,
   `EntityCompressor`) can pack configs that fit a per-type definition into ASCII strings. That gives a
   `CompressedWorldConfig` with `entityDefinitions`, and `world.load` expands its strings with
   `decompressEntities` before loading.
@@ -229,7 +231,7 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
   still resolve. The main-thread fallback
   (`EntitySystemWebWorker`) shares the world's cache directly and ignores both the shipped heap and `grow-buffer`.
 - **Off-thread allocation foundation:** the `load` message also ships `sharedMemory` (`getSharedComponentMemory()`):
-  one `SharedPoolMemory` per component + the eid counter's `SharedAllocatedMemory`. A real worker reconstructs a
+  one `SharedPoolMemory` per component + the eid counter's and `SharedRandom`'s `SharedAllocatedMemory`. A real worker reconstructs a
   `name → MemoryComponent` registry over the same pools and injects a `world.allocate` (`WorkerAllocator`) each run:
   `allocateEid()` (heap atomic) and `allocateComponentBlock(name, values)` (pushes into the shared pool). The fallback
   mirrors this over `world.registry`/`allocateEid` directly. When a worker's allocation grows the heap, it posts
@@ -273,7 +275,7 @@ entity pass and does not expose this option. Unsliced defaults are unchanged.
 - **Worker update-function hooks:** besides the per-entity body, an `updateFunction` may carry `init`,
   `queryChanged`, `preRun`, and `entityRemoved`. `init(world, data, entities, queries)` runs on every `finishLoading` after the load's
   membership is applied — `world` is an `EntityWorkerSystemInitWorld` (`gameTime` shipped in the `load` message,
-  `getString`, `heap`; no callbacks), `data` comes from the system's `getInitData()` (typed via the `D` param), and the lists
+  `getString`, `heap`, `random`; no callbacks), `data` comes from the system's `getInitData()` (typed via the `D` param), and the lists
   hold every loaded entity (a `WorkerSystem` run function's `init(world, data, queries)` omits the empty entity list). Its returned `Partial<W>` is merged onto `world`
   every run, so worker-local state (seeded RNG, lookup tables) persists without re-sending. `queryChanged` runs
   before `preRun`, once per sub-query whose membership changed, with its `{ added, removed }` delta (`added` is an

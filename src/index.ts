@@ -28,6 +28,8 @@ export type {
 } from './entity-class';
 export { entityDefinition, CLASS_INDEX, DEAD_INDEX, STATIC_INDEX, TYPE_INDEX } from './entity-component';
 export { default as ConstantStringCache } from './constant-string-cache';
+export { default as SharedRandom } from './shared-random';
+export type { RandomConfig, RandomState } from './shared-random';
 export type {
 	EntityComponent,
 	EntityClassConfig,

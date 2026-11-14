@@ -4,6 +4,7 @@ import type BaseWorld from '../world';
 import type BaseEntity from '../entity';
 import type { BaseComponent, ComponentDefinitionMap, ComponentMap } from '../component-definition';
 import type { ComponentTypedArray } from '../memory-component';
+import type SharedRandom from '../shared-random';
 import System, { forEachInMatchingGroups, type EntityBatch, type SystemConfig } from './system';
 import type EntitySystemWorkerMessage from './workers/entity-system-worker-message';
 import type { EntityWorkBatch, LoadQueryDelta } from './workers/entity-system-worker-message';
@@ -709,7 +710,7 @@ export interface WorkerAllocator {
 }
 
 // No callbacks or elapsedTime: init only seeds worker-local state, outside any run.
-export type EntityWorkerSystemInitWorld = Pick<EntityWorkerSystemWorld, 'gameTime' | 'getString' | 'heap'>;
+export type EntityWorkerSystemInitWorld = Pick<EntityWorkerSystemWorld, 'gameTime' | 'getString' | 'heap' | 'random'>;
 
 export interface EntityWorkerSystemWorld {
 	gameTime: number
@@ -719,6 +720,8 @@ export interface EntityWorkerSystemWorld {
 	// update function can rebuild heap-backed structures (a SharedMap/SharedList) from a pointer in a component
 	// block. Undefined only before the first run.
 	heap?: MemoryHeap
+	// The world's shared seeded RNG; use instead of Math.random so saves can restore it.
+	random: SharedRandom
 	allocate?: WorkerAllocator
 	// Injected each run on a system registered with createsEntities: builds a WorkerCreatedEntity descriptor from a
 	// factory config (merges the type's template, allocates + writes each component's block). Drives createEntityWorker.

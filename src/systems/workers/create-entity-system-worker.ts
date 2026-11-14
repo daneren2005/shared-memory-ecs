@@ -4,6 +4,7 @@ import type EntitySystemWorkerMessage from './entity-system-worker-message';
 import type { EntityEvent, SystemEvents, WorkerRunError } from './entity-system-worker-message';
 import ConstantStringCache from '../../constant-string-cache';
 import MemoryComponent from '../../memory-component';
+import SharedRandom, { RANDOM_STATE_LENGTH } from '../../shared-random';
 import type { ComponentDefinitionMap, ComponentMap } from '../../component-definition';
 import type {
 	EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityQueryComponents, EntityUpdateComponents,
@@ -61,6 +62,8 @@ export default function createEntitySystemWorker<
 	// allocation. `definitions` (passed by the game's worker entry) supplies each component's toBlock/loadProperties.
 	let pools: { [name: string]: MemoryComponent } = {};
 	let eidCounter: AllocatedMemory | undefined;
+	// Placeholder until load ships the world's shared state.
+	let random = new SharedRandom(new Uint32Array(RANDOM_STATE_LENGTH));
 	let factoryConfigs: FactoryConfigs | undefined;
 	let factoryClasses: WorkerEntityClassRegistry | undefined;
 	let addsComponents = false;
@@ -87,6 +90,7 @@ export default function createEntitySystemWorker<
 					pools[name] = MemoryComponent.fromSharedMemory(heap, message.sharedMemory.components[name]);
 				}
 				eidCounter = heap.getSharedAlloc(message.sharedMemory.eidCounter);
+				random = SharedRandom.fromSharedMemory(heap, message.sharedMemory.random);
 			}
 			factoryConfigs = message.factoryConfigs;
 			factoryClasses = message.factoryClasses;
@@ -95,7 +99,7 @@ export default function createEntitySystemWorker<
 			Object.values(message.queries).forEach(delta => expandPackedAdded(delta, pools));
 			entities.apply(message.entities as QueryDelta<T>);
 			const queries = applyQueryDeltas(message.queries);
-			worldExtension = updateFunction.init?.({ gameTime: message.gameTime, getString, heap }, message.data, entities.entries, queries) ?? undefined;
+			worldExtension = updateFunction.init?.({ gameTime: message.gameTime, getString, heap, random },message.data, entities.entries, queries) ?? undefined;
 			postMessageTyped(scope, {
 				type: 'loaded',
 			});
@@ -121,6 +125,7 @@ export default function createEntitySystemWorker<
 			}
 			message.world.getString = getString;
 			message.world.heap = heap;
+			message.world.random = random;
 			const allocator = {
 				allocateEid: () => eidCounter ? Atomics.add(eidCounter.data, 0, 1) + 1 : 0,
 				allocateComponentBlock: (name: string, values: Array<number>) => pools[name].create(values),

@@ -53,7 +53,7 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 		} else if(message.type === 'load') {
 			this.entities.apply(message.entities as QueryDelta<T>);
 			const queries = this.applyQueryDeltas(message.queries);
-			const world = { gameTime: message.gameTime, getString: this.getString, heap: this.world.heap };
+			const world = { gameTime: message.gameTime, getString: this.getString, heap: this.world.heap, random: this.world.random };
 			this.worldExtension = this.updateFunction.init?.(world, message.data, this.entities.entries, queries) ?? undefined;
 			this.onMessageTyped({
 				type: 'loaded',
@@ -70,6 +70,7 @@ export default class EntitySystemWebWorker<C extends ComponentMap, T extends Ent
 			}
 			message.world.getString = this.getString;
 			message.world.heap = this.world.heap;
+			message.world.random = this.world.random;
 			message.world.allocate = this.allocator;
 			if(this.createsEntities) {
 				const registry: WorkerCreateRegistry = this.world.registry;

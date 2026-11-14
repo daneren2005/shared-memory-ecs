@@ -10,6 +10,7 @@ export { default as addComponentWorker } from './actions/add-component-worker';
 export { default as removeComponentWorker } from './actions/remove-component-worker';
 export { default as killEntityWorker } from './actions/kill-entity-worker';
 export { CLASS_INDEX, DEAD_INDEX, TYPE_INDEX } from './entity-component';
+export type { default as SharedRandom, RandomConfig, RandomState } from './shared-random';
 
 export type { default as EntitySystemWorkerMessage } from './systems/workers/entity-system-worker-message';
 export type { EntityEvent, SystemEvents } from './systems/workers/entity-system-worker-message';
