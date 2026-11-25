@@ -250,6 +250,26 @@ describe.each(MODES)('entity-worker-system (%s)', (mode) => {
 			expect(system.getPendingDelta().added).toEqual([entity.eid]);
 			expect(system.getPendingDelta('moving').added).toEqual([entity.eid]);
 		});
+
+		it('still removes an entity re-queued by a component change and then removed in the same frame', () => {
+			let system = useSystem(new StubSystem(world, mode, {
+				required: ['health'],
+				queries: {
+					moving: {
+						required: ['movement'],
+					},
+				},
+			}));
+
+			let entity = createEntity({ maxHealth: 100 });
+			system.run(0);
+
+			entity.loadComponent('movement', { speed: 100 });
+			world.removeEntity(entity);
+
+			expect(system.getPendingDelta()).toEqual({ added: [], removed: [entity.eid] });
+			expect(system.getPendingDelta('moving')).toEqual({ added: [], removed: [] });
+		});
 	});
 
 	// The update pipeline, where the backends genuinely differ (the real worker caches blocks by id and gets

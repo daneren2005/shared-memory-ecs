@@ -469,7 +469,7 @@ export default abstract class EntityWorkerSystem<
 			});
 		}
 		const removed = Array.from(delta.removed);
-		this.queryDeltas[queryName] = { added: new Set(), removed: new Set() };
+		this.queryDeltas[queryName] = { added: new Set(), removed: new Set(), unsent: new Set() };
 
 		return { added, removed };
 	}
@@ -529,28 +529,31 @@ export default abstract class EntityWorkerSystem<
 	private getQueryDelta(queryName: string): MembershipDelta<C> {
 		let delta = this.queryDeltas[queryName];
 		if(!delta) {
-			delta = this.queryDeltas[queryName] = { added: new Set(), removed: new Set() };
+			delta = this.queryDeltas[queryName] = { added: new Set(), removed: new Set(), unsent: new Set() };
 		}
 
 		return delta;
 	}
 	// A pending removal this same frame is cancelled, so the net effect is a re-send rather than remove+add churn.
-	private markAdded(delta: MembershipDelta<C>, entity: BaseEntity<C>) {
-		delta.removed.delete(entity.eid);
+	private markAdded(delta: MembershipDelta<C>, entity: BaseEntity<C>, member: boolean) {
+		if(!delta.removed.delete(entity.eid) && !member) {
+			delta.unsent.add(entity.eid);
+		}
 		delta.added.add(entity);
 	}
+	// Only an entity the worker has never seen cancels out; one re-sent after a component change must still be dropped.
 	private markRemoved(delta: MembershipDelta<C>, entity: BaseEntity<C>) {
-		if(delta.added.delete(entity)) {
-			return;
+		delta.added.delete(entity);
+		if(!delta.unsent.delete(entity.eid)) {
+			delta.removed.add(entity.eid);
 		}
-
-		delta.removed.add(entity.eid);
 	}
 	protected updateEntityList(queryName: string, list: Map<number, BaseEntity<C>>, entity: BaseEntity<C>, shouldInclude: boolean) {
 		const delta = this.getQueryDelta(queryName);
 		if(shouldInclude) {
+			const member = list.get(entity.eid) === entity;
 			list.set(entity.eid, entity);
-			this.markAdded(delta, entity);
+			this.markAdded(delta, entity, member);
 		} else if(list.delete(entity.eid)) {
 			this.markRemoved(delta, entity);
 		}
@@ -697,6 +700,8 @@ export interface QueryDelta<T extends EntityUpdateComponents = EntityUpdateCompo
 interface MembershipDelta<C extends ComponentMap> {
 	added: Set<BaseEntity<C>>
 	removed: Set<number>
+	// Eids added since the last flush that the worker has no entry for.
+	unsent: Set<number>
 }
 type EntityMembers<C extends ComponentMap> = Map<number, BaseEntity<C>> | Set<BaseEntity<C>>;
 
