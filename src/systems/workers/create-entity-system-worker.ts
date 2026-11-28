@@ -5,12 +5,12 @@ import type { EntityEvent, SystemEvents, WorkerRunError } from './entity-system-
 import ConstantStringCache from '../../constant-string-cache';
 import MemoryComponent from '../../memory-component';
 import SharedRandom, { RANDOM_STATE_LENGTH } from '../../shared-random';
-import type { ComponentDefinitionMap, ComponentMap } from '../../component-definition';
+import type { ComponentMap, WorkerComponentDefinitionMap } from '../../component-definition';
 import type {
 	EntityWorkerSystemCallbacks, EntityWorkerSystemWorld, EntityQueryComponents, EntityUpdateComponents,
 	EntityUpdateFunction, QueryDelta, WorkerComponentChange, WorkerCreatedEntity,
 } from '../entity-worker-system';
-import { buildWorkerComponent, buildWorkerEntity, type FactoryConfigs } from '../../actions/build-worker-entity';
+import { buildWorkerComponent, buildWorkerEntity, type FactoryConfigs} from '../../actions/build-worker-entity';
 import type { WorkerEntityClassRegistry } from '../../entity-class';
 import QueryMembership from './query-membership';
 import EntityWorkBatchState from './entity-work-batch';
@@ -29,7 +29,7 @@ export default function createEntitySystemWorker<
 	T extends EntityUpdateComponents<C>,
 	W extends EntityWorkerSystemWorld = EntityWorkerSystemWorld,
 	D = unknown,
->(scope: EntitySystemWorkerScope, updateFunction: EntityUpdateFunction<C, T, W, D>, definitions?: ComponentDefinitionMap) {
+>(scope: EntitySystemWorkerScope, updateFunction: EntityUpdateFunction<C, T, W, D>, definitions?: WorkerComponentDefinitionMap) {
 	scope.addEventListener?.('unhandledrejection', event => {
 		const reason: unknown = event.reason;
 		// Copy error details without a potentially uncloneable rejection reason or cause.

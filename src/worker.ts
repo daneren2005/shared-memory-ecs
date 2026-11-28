@@ -3,6 +3,7 @@
 // re-exports only what worker code uses, keeping those bundles tiny.
 export { default as createEntitySystemWorker } from './systems/workers/create-entity-system-worker';
 export type { EntitySystemWorkerScope } from './systems/workers/create-entity-system-worker';
+export type { WorkerComponentDefinitionMap } from './component-definition';
 export { default as createSystemWorker } from './systems/workers/create-system-worker';
 export type { WorkerSystemRunFunction, WorkerSystemInitFunction } from './systems/workers/create-system-worker';
 export { default as createEntityWorker } from './actions/create-entity-worker';

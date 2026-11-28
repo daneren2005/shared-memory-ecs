@@ -61,6 +61,7 @@ export type {
 	EntityConfigOf,
 	RegisteredComponentDefinition,
 	RegisteredComponentRegistry,
+	WorkerComponentDefinitionMap,
 } from './component-definition';
 
 export { default as System } from './systems/system';

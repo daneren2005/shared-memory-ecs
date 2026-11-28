@@ -65,6 +65,8 @@ export type RegisteredComponentRegistry<C extends ComponentMap> = {
 
 // The entity component is NOT part of this map; the World adds it automatically.
 export type ComponentDefinitionMap = Record<string, ComponentDefinition<BaseComponent>>;
+// What createEntitySystemWorker reads to build blocks, so worker entries can leave out attach/save and their classes.
+export type WorkerComponentDefinitionMap = Record<string, Pick<ComponentDefinition<BaseComponent>, 'loadProperties' | 'loadInFinishLoading' | 'toBlock'>>;
 
 type UnionToIntersection<U> = (U extends unknown ? (k: U) => void : never) extends (k: infer I) => void ? I : never;
 
